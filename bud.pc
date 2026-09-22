@@ -1,0 +1,10 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libbud
+Description: Pure-C DOM, SSR, and WASM runtime library
+Version: 0.1.0
+Libs: -L${libdir} -lbud
+Cflags: -I${includedir}
