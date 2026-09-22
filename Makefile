@@ -6,6 +6,7 @@ libbud-obj-y := src/bud_wasm_app.o
 LDLIBS-bud_test := -lbud
 
 include ../mk/include.mk
+LDLIBS-alpine :=
 
 ${DESTDIR}${PREFIX}/lib/pkgconfig/bud.pc: bud.pc
 	install -d ${DESTDIR}${PREFIX}/lib/pkgconfig
