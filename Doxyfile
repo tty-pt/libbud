@@ -1,0 +1,4 @@
+PROJECT_NAME           = "bud"
+@INCLUDE = ../mk/Doxyfile
+INPUT                  = include/bud/
+EXCLUDE                = src/jsmn.h
