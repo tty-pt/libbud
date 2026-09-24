@@ -1,0 +1,5 @@
+*.o
+*.d
+/lib
+/bin
+/man
