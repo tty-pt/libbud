@@ -1,20 +1,21 @@
-# bud
+# libbud
 
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![No dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#)
 
+> Isomorphic C DOM scaffold — one renderer for SSR + WASM.
+
 A small C DOM scaffold for building isomorphic user interfaces: it renders HTML
 on the server (SSR) and, through a WASM bridge, hydrates and enhances the
 same DOM in the browser — from the **same C source**. One renderer, both sides.
-
----
 
 ## Contents
 
 - [Features](#features)
 - [Zero dependencies](#zero-dependencies)
-- [Build & install](#build--install)
+- [Install](#install)
+- [Build from source](#build-from-source)
 - [Quickstart](#quickstart)
 - [JSX convenience macros](#jsx-convenience-macros)
 - [API overview](#api-overview)
@@ -41,15 +42,22 @@ bud is pure C and links **libc only** (`ldd libbud.so` → `libc.so.6`). It brin
 in no framework, no database, no storage layer, and no third-party library — the
 only vendored code is the self-contained `jsmn.h` JSON tokenizer.
 
-## Build & install
+## Install
 
-The library builds with a plain `make` (repo's shared `mk/include.mk`):
+Prebuilt packages are distributed on tty.pt for Linux (APT / Alpine / Arch /
+Fedora-RHEL), macOS (Homebrew), Windows (winget / MSYS2), and OpenBSD.
+Follow the [installation instructions](
+https://github.com/tty-pt/ci/blob/main/docs/install.md) and use
+**libbud** as the package name.
+
+## Build from source
+
+The library builds with a plain `make` (the shared [`mk` include.mk](
+https://github.com/tty-pt/mk)):
 
 ```sh
-cd external/libbud
 make          # lib/libbud.so + bin/bud_test
 make test     # run the in-tree self-test suite
-
 sudo make install   # lib, headers, and bud.pc → $(PREFIX), default /usr/local
 ```
 
@@ -161,8 +169,10 @@ It is neutral and self-contained (pure C, no framework/database/storage
 dependencies); other frameworks can implement the same SSR contract with their
 own client runtime.
 
-See `../../docs/C-ISOMORPHIC-BUD.md`, `../../docs/WASM-BRIDGE.md`, and
-`../../docs/SSR-CONTRACT.md` for the full contract.
+See [C-ISOMORPHIC-BUD.md](https://github.com/tty-pt/site/blob/main/docs/C-ISOMORPHIC-BUD.md),
+[WASM-BRIDGE.md](https://github.com/tty-pt/site/blob/main/docs/WASM-BRIDGE.md),
+and [SSR-CONTRACT.md](https://github.com/tty-pt/site/blob/main/docs/SSR-CONTRACT.md)
+for the full contract.
 
 ## Testing
 
@@ -175,4 +185,4 @@ and `make test` runs the full platform suite.
 
 ## License
 
-BSD 2-Clause License. Copyright (c) 2026, tty-pt. See `../../LICENSE`.
+BSD 2-Clause License. Copyright (c) 2026, tty-pt. See `LICENSE`.
