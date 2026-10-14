@@ -1,3 +1,7 @@
+## 1.0.1
+
+- **Documentation & Branding Refresh**: Updated README documentation and added visual identity assets. Core isomorphic DOM and SSR/WASM runtime remain stable.
+
 ## 1.0.0
 
 - **First stable release** — a small C DOM scaffold for building isomorphic user interfaces: renders HTML on the server (SSR) and, through a WASM bridge, hydrates and enhances the same DOM in the browser from the **same C source**. One renderer, both sides.
