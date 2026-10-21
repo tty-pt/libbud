@@ -11,18 +11,70 @@
 
 > One renderer for native SSR and browser WASM. An isomorphic, zero-dependency C DOM scaffold and reactive state binder with JSX ergonomics.
 
----
-
-## Isomorphic Architecture
-
-`libbud` provides the user interface layer for native servers and the browser:
-- **Dual-Target Compilation**: Compiles natively as a `.so` for server-side HTML rendering (SSR), and to WebAssembly (`.wasm`) for progressive browser hydration from the same C source.
-- **Data Schema Binding**: Bridges to [libhyle](https://github.com/tty-pt/hyle) via `libhyle-bud` to bind schema fields directly to UI forms, tables, and filters.
-- **Web Host**: Static `.wasm` bundles and server endpoints are served by [axil](https://github.com/tty-pt/axil).
+`libbud` provides an isomorphic UI model for C: the exact same component function renders static, SEO-friendly HTML on the server and runs client-side inside WebAssembly to hydrate event listeners and apply minimal DOM patch streams.
 
 ---
 
-## Quickstart
+## Contents
+
+- [Isomorphic Architecture & Hydration](#isomorphic-architecture--hydration)
+- [The 5-Field State Binding Contract](#the-5-field-state-binding-contract)
+- [Dual-Target Compilation Pipeline](#dual-target-compilation-pipeline)
+- [Quickstart: Declarative UI](#quickstart-declarative-ui)
+- [Core API Reference](#core-api-reference)
+- [Design Philosophy: Truly Zero Dependencies](#design-philosophy-truly-zero-dependencies)
+- [Installation & Build](#installation--build)
+- [License](#license)
+
+---
+
+## Isomorphic Architecture & Hydration
+
+1. **Server-Side Render (SSR)**: The server executes `bud_app_render(state)`, serializing the AST to plain HTML strings. State is injected into a `<script type="application/json" id="bud-state">` tag alongside `#bud-root`.
+2. **Instant Paint**: The browser renders clean HTML immediately with zero layout shift—even if JavaScript or WASM is disabled.
+3. **WASM Hydration**: When `htdocs/*.wasm` loads, `bud_hydrate()` reads `#bud-state`, unpacks the JSON into C structs, and attaches event listeners to existing DOM nodes without re-rendering the tree.
+
+---
+
+## The 5-Field State Binding Contract
+
+`libbud` uses a declarative 5-field descriptor (`bud_field_desc_t`) to unpack JSON state into C memory without manual parsing:
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `name` | `const char *` | JSON key name |
+| `type` | `bud_type_t` | Type identifier (`BUD_TYPE_STR`, `BUD_TYPE_INT`, `BUD_TYPE_BOOL`) |
+| `offset` | `size_t` | Byte offset in C state struct (`offsetof(state_t, member)`) |
+| `size` | `size_t` | Buffer capacity (strings) or scalar byte size |
+| `def_val` | `const char *` | Fallback default value if absent from JSON |
+
+```c
+static const bud_field_desc_t state_fields[] = {
+    { "query",   BUD_TYPE_STR, offsetof(state_t, query),   sizeof(((state_t*)0)->query), "" },
+    { "page",    BUD_TYPE_INT, offsetof(state_t, page),    sizeof(int), "1" },
+    { "active",  BUD_TYPE_BOOL, offsetof(state_t, active), sizeof(int), "0" },
+};
+```
+
+---
+
+## Dual-Target Compilation Pipeline
+
+The exact same C file compiles to a native `.so` module and a browser `.wasm` binary:
+
+```sh
+# 1. Native compile for Server-Side Rendering (SSR):
+cc -shared -fPIC -O2 -o mod.so mod.c $(pkg-config --cflags --libs bud)
+
+# 2. WASI/WebAssembly compile for browser hydration:
+clang --target=wasm32-wasi -O2 -nostdlib \
+  -Wl,--no-entry -Wl,--export=bud_app_render \
+  -I/usr/include/bud -o htdocs/mod.wasm mod.c -lbud
+```
+
+---
+
+## Quickstart: Declarative UI
 
 Build and render a declarative HTML component in pure C99:
 
@@ -55,7 +107,7 @@ cc ui_demo.c $(pkg-config --cflags --libs bud)
 
 ---
 
-## Core API (The Essential 20%)
+## Core API Reference
 
 | Function / Macro | Signature | Description |
 | :--- | :--- | :--- |
