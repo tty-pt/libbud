@@ -15,8 +15,21 @@
 
 ---
 
+## Why libbud? (The No-React Isomorphic C Web)
+
+Modern full-stack web development often forces developers into a sprawling dependency nightmare: Node.js, Webpack, Babel, massive `node_modules` folders, and delicate hydration mismatches just to get dynamic user interfaces.
+
+`libbud` offers an alternative path in pure C:
+- **Write Once, Run Everywhere in C**: The exact same C component function compiles natively to `.so` for server-side HTML rendering (SSR) and to WebAssembly (`.wasm`) for browser client hydration.
+- **Microsecond Server HTML**: The server serializes UI trees to clean, standards-compliant HTML strings in microseconds without any JavaScript runtime.
+- **Zero-Flicker Progressive Enhancement**: Pages render immediately on the client with zero layout shift. If a user disables JavaScript, the page works completely because it's authentic HTML.
+- **Truly Zero Dependencies**: Links strictly to libc (`libc.so.6`). No npm, no React runtime, and no external JSON parsers.
+
+---
+
 ## Contents
 
+- [Why libbud? (The No-React Isomorphic C Web)](#why-libbud-the-no-react-isomorphic-c-web)
 - [Isomorphic Architecture & Hydration](#isomorphic-architecture--hydration)
 - [The 5-Field State Binding Contract](#the-5-field-state-binding-contract)
 - [Dual-Target Compilation Pipeline](#dual-target-compilation-pipeline)
