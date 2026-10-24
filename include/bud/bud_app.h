@@ -12,6 +12,26 @@
 #include "bud.h"
 #include "bud_jsx.h"
 
+#if __has_include(<ttypt/iso.h>)
+#include <ttypt/iso.h>
+#else
+#if defined(__wasm__)
+  #define ISO_EXPORT(ret, name, ...) \
+      __attribute__((export_name(#name))) ret name(__VA_ARGS__)
+  #define ISO_EXPORT_AS(ret, c_name, wasm_name, ...) \
+      __attribute__((export_name(#wasm_name))) ret c_name(__VA_ARGS__)
+  #define ISO_IMPORT(ret, module_name, name, ...) \
+      __attribute__((import_module(#module_name), import_name(#name))) ret name(__VA_ARGS__)
+#else
+  #define ISO_EXPORT(ret, name, ...) \
+      __attribute__((visibility("default"))) ret name(__VA_ARGS__)
+  #define ISO_EXPORT_AS(ret, c_name, wasm_name, ...) \
+      __attribute__((visibility("default"))) ret c_name(__VA_ARGS__)
+  #define ISO_IMPORT(ret, module_name, name, ...) \
+      ret name(__VA_ARGS__)
+#endif
+#endif
+
 #ifdef __wasm__
 
 /**
@@ -25,7 +45,7 @@ extern bud_node *bud_app_render(void);
  * @param[in] render_fn Function returning the root node.
  */
 #define BUD_APP_ROUTE(render_fn)                                               \
-	bud_node *bud_app_render(void)                                         \
+	ISO_EXPORT(bud_node *, bud_app_render, void)                           \
 	{                                                                      \
 		return render_fn();                                            \
 	}
@@ -33,8 +53,7 @@ extern bud_node *bud_app_render(void);
 /**
  * @brief Host import: emit one patch operation to the browser adapter.
  */
-__attribute__((import_module("env"), import_name("bud_host_emit_patch"))) void
-bud_host_emit_patch(
+ISO_IMPORT(void, bud, bud_host_emit_patch,
         const char *op, size_t op_len, const char *a, size_t a_len,
         const char *b, size_t b_len, const char *c, size_t c_len);
 
@@ -63,6 +82,15 @@ void bud_app_set_state(void);
  * @return The runtime, or NULL before initialization.
  */
 bud_runtime *wasm_get_runtime(void);
+
+/**
+ * @brief Standardized isomorphic frame loop contract (60fps animation tick).
+ * Called by browser requestAnimationFrame.
+ * @param[in] dt Delta time in seconds.
+ * @param[in] width Viewport width in pixels.
+ * @param[in] height Viewport height in pixels.
+ */
+void wasm_tick(float dt, int width, int height);
 
 #else
 
@@ -99,6 +127,15 @@ void bud_app_set_state(void);
  * @return The runtime, or NULL before initialization.
  */
 bud_runtime *wasm_get_runtime(void);
+
+/**
+ * @brief Standardized isomorphic frame loop contract (60fps animation tick).
+ * Called by browser requestAnimationFrame.
+ * @param[in] dt Delta time in seconds.
+ * @param[in] width Viewport width in pixels.
+ * @param[in] height Viewport height in pixels.
+ */
+void wasm_tick(float dt, int width, int height);
 
 #endif
 

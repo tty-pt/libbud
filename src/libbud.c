@@ -2423,11 +2423,15 @@ static int bud_vdom_diff_node(
 	    (old_node->kind == BUD_NODE_ELEMENT &&
 	     strcmp(old_node->tag, new_node->tag) != 0))
 	{
-		char *html = bud_render_html(new_node);
-		if (!html)
+		bud_assign_ids(new_node, old_node->id);
+		bud_buf b;
+		bud_buf_init(&b);
+		if (bud_render_hydrated_html_node(new_node, &b) != 0) {
+			free(b.data);
 			return -1;
-		int rc = emit(user, "patch-replace", id_buf, html, NULL);
-		bud_free_string(html);
+		}
+		int rc = emit(user, "patch-replace", id_buf, b.data ? b.data : "", NULL);
+		free(b.data);
 		return rc;
 	}
 
@@ -2472,6 +2476,15 @@ static int bud_vdom_diff_node(
 				         old_attr->name, "") != 0)
 					return -1;
 			}
+		}
+
+		/* Emit patch-listener for new listeners */
+		const bud_listener *nl;
+		for (nl = new_node->listeners; nl; nl = nl->next) {
+			char bubbles_buf[8];
+			snprintf(bubbles_buf, sizeof(bubbles_buf), "%d", nl->bubbles ? 1 : 0);
+			if (emit(user, "patch-listener", id_buf, nl->event, bubbles_buf) != 0)
+				return -1;
 		}
 
 		/* If this element contains raw HTML, emit patch-innerhtml on
@@ -4000,3 +4013,62 @@ int bud_api_action_handler(bud_event *event)
 
 	return 0;
 }
+
+/* --- Centralized Composable Slot Architecture (bud_slot) --- */
+
+#include "../include/bud/bud_slot.h"
+
+#define BUD_MAX_SLOT_CONTRIBS 128
+static const bud_slot_contrib_t *g_slot_contribs[BUD_MAX_SLOT_CONTRIBS];
+static size_t g_slot_contrib_count = 0;
+
+int bud_slot_register(const bud_slot_contrib_t *contrib)
+{
+	if (!contrib || g_slot_contrib_count >= BUD_MAX_SLOT_CONTRIBS)
+		return -1;
+
+	/* Insert in ascending priority order */
+	size_t i = 0;
+	while (i < g_slot_contrib_count && g_slot_contribs[i]->priority <= contrib->priority) {
+		i++;
+	}
+
+	for (size_t j = g_slot_contrib_count; j > i; j--) {
+		g_slot_contribs[j] = g_slot_contribs[j - 1];
+	}
+	g_slot_contribs[i] = contrib;
+	g_slot_contrib_count++;
+	return 0;
+}
+
+bud_node *bud_slot_render(int slot_id, const void *state)
+{
+	for (size_t i = 0; i < g_slot_contrib_count; i++) {
+		if (g_slot_contribs[i]->slot_id == slot_id && g_slot_contribs[i]->render) {
+			bud_node *n = g_slot_contribs[i]->render(slot_id, state);
+			if (n)
+				return n;
+		}
+	}
+	return NULL;
+}
+
+int bud_slot_fill(int slot_id, bud_node *parent, const void *state)
+{
+	if (!parent)
+		return -1;
+	int filled = 0;
+	for (size_t i = 0; i < g_slot_contrib_count; i++) {
+		if (g_slot_contribs[i]->slot_id == slot_id && g_slot_contribs[i]->fill) {
+			if (g_slot_contribs[i]->fill(slot_id, parent, state) == 0)
+				filled++;
+		}
+	}
+	return filled;
+}
+
+void bud_slot_reset(void)
+{
+	g_slot_contrib_count = 0;
+}
+

@@ -140,6 +140,9 @@ cc ui_demo.c $(pkg-config --cflags --libs bud)
 * **Libc Only**: `bud` links strictly to `libc` (`ldd libbud.so` → `libc.so.6`). No Node, no npm, no React runtime, and no heavy JSON library (vendors a tiny, embedded `jsmn.h` tokenizer).
 * **Single Source of Truth**: The exact same C source code generates the initial SSR HTML payload on the server and runs client-side inside the browser WASM engine.
 * **Progressive Enhancement Contract**: Plain HTML renders immediately on the client even if WebAssembly or JavaScript is completely disabled.
+* **Namespaced Host Import Isolation**: The WebAssembly guest environment uses strict namespaced `bud.*` host imports (`bud_host_emit_patch`, `bud_host_invalidate`, etc.) validated against `wasm-allowed-imports.lst` to guarantee process-level capability containment.
+* **Extensible UI Slots & Keyed Hydration**: The `<bud/bud_slot.h>` engine allows independent tenant modules and subviews to contribute DOM subtrees to designated slots (`BUD_SLOT_DEFINE`, `BUD_SLOT_CONTRIBUTE`), while `<bud/bud_state.h>` provides declarative state serialization (`BUD_DEFINE_STATE`) and keyed hydration (`bud_state_hydrate`).
+* **Web HAL Frame Loop Contract**: For interactive hardware viewports (Canvas 2D, WebGL 3D), `libbud` exports `wasm_tick(float dt, int width, int height)` in `bud_wasm_app.c` driving a continuous 60fps frame loop without virtual DOM thrashing.
 
 ---
 
