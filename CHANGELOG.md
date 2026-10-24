@@ -1,8 +1,14 @@
-## 1.0.1
+## [1.0.2]
+
+- **Namespaced WASM Imports & Capability Boundary**:
+  - Standardized namespaced `bud.*` host imports for DOM patching, runtime invalidation, and state synchronization.
+  - Hardened WebAssembly guest/host capability allowlist (`wasm-allowed-imports.lst`).
+
+## [1.0.1]
 
 - **Documentation & Branding Refresh**: Updated README documentation and added visual identity assets. Core isomorphic DOM and SSR/WASM runtime remain stable.
 
-## 1.0.0
+## [1.0.0]
 
 - **First stable release** — a small C DOM scaffold for building isomorphic user interfaces: renders HTML on the server (SSR) and, through a WASM bridge, hydrates and enhances the same DOM in the browser from the **same C source**. One renderer, both sides.
 - **Node tree**: fragments, elements, text, and raw HTML, with attribute storage, class-name helpers, and child/attribute/listener accessors.

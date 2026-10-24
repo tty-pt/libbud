@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-__attribute__((import_module("env"), import_name("bud_host_log"))) void
+__attribute__((import_module("bud"), import_name("bud_host_log"))) void
 bud_host_log(const char *msg, size_t len);
 #define WASM_LOG(msg)                                                          \
 	do {                                                                   \
@@ -25,16 +25,16 @@ static void wasm_printf(const char *fmt, ...)
 	bud_host_log(buf, strlen(buf));
 }
 
-__attribute__((import_module("env"), import_name("bud_host_mark_dirty"))) void
+__attribute__((import_module("bud"), import_name("bud_host_mark_dirty"))) void
 bud_host_mark_dirty(void);
 
-__attribute__((import_module("env"), import_name("bud_host_flush"))) void
+__attribute__((import_module("bud"), import_name("bud_host_flush"))) void
 bud_host_flush(void);
 
-__attribute__((import_module("env"), import_name("bud_host_fetch"))) void
+__attribute__((import_module("bud"), import_name("bud_host_fetch"))) void
 bud_host_fetch(const char *url, size_t url_len, int request_id);
 
-__attribute__((import_module("env"), import_name("bud_host_set_location"))) void
+__attribute__((import_module("bud"), import_name("bud_host_set_location"))) void
 bud_host_set_location(const char *url, size_t url_len);
 
 /* Platform host function pointers (declared in bud.h) */
@@ -98,6 +98,7 @@ void bud_app_set_state(void)
 
 	bud_runtime_free(runtime);
 	runtime = bud_runtime_new(new_root);
+	bud_runtime_mount(runtime);
 }
 
 __attribute__((export_name("bud_app_update"))) void wasm_update(void)
@@ -195,13 +196,6 @@ __attribute__((export_name("bud_app_dispatch"))) int wasm_dispatch_event(
 			        runtime, target, event_name, event_data);
 			return ret;
 		}
-		char html[256];
-		snprintf(html, sizeof(html), "node %d not found", node_id);
-		char idstr[16];
-		snprintf(idstr, sizeof(idstr), "%u", bud_node_id(root));
-		bud_host_emit_patch(
-		        "patch-raw", 9, html, strlen(html), idstr,
-		        strlen(idstr), NULL, 0);
 		wasm_printf("dispatch: node=%d NOT FOUND\n", node_id);
 		return -2;
 	}

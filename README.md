@@ -140,6 +140,7 @@ cc ui_demo.c $(pkg-config --cflags --libs bud)
 * **Libc Only**: `bud` links strictly to `libc` (`ldd libbud.so` → `libc.so.6`). No Node, no npm, no React runtime, and no heavy JSON library (vendors a tiny, embedded `jsmn.h` tokenizer).
 * **Single Source of Truth**: The exact same C source code generates the initial SSR HTML payload on the server and runs client-side inside the browser WASM engine.
 * **Progressive Enhancement Contract**: Plain HTML renders immediately on the client even if WebAssembly or JavaScript is completely disabled.
+* **Namespaced Host Import Isolation**: The WebAssembly guest environment uses strict namespaced `bud.*` host imports (`bud_host_emit_patch`, `bud_host_invalidate`, etc.) validated against `wasm-allowed-imports.lst` to guarantee process-level capability containment.
 
 ---
 

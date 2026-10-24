@@ -2423,11 +2423,15 @@ static int bud_vdom_diff_node(
 	    (old_node->kind == BUD_NODE_ELEMENT &&
 	     strcmp(old_node->tag, new_node->tag) != 0))
 	{
-		char *html = bud_render_html(new_node);
-		if (!html)
+		bud_assign_ids(new_node, old_node->id);
+		bud_buf b;
+		bud_buf_init(&b);
+		if (bud_render_hydrated_html_node(new_node, &b) != 0) {
+			free(b.data);
 			return -1;
-		int rc = emit(user, "patch-replace", id_buf, html, NULL);
-		bud_free_string(html);
+		}
+		int rc = emit(user, "patch-replace", id_buf, b.data ? b.data : "", NULL);
+		free(b.data);
 		return rc;
 	}
 
@@ -2472,6 +2476,15 @@ static int bud_vdom_diff_node(
 				         old_attr->name, "") != 0)
 					return -1;
 			}
+		}
+
+		/* Emit patch-listener for new listeners */
+		const bud_listener *nl;
+		for (nl = new_node->listeners; nl; nl = nl->next) {
+			char bubbles_buf[8];
+			snprintf(bubbles_buf, sizeof(bubbles_buf), "%d", nl->bubbles ? 1 : 0);
+			if (emit(user, "patch-listener", id_buf, nl->event, bubbles_buf) != 0)
+				return -1;
 		}
 
 		/* If this element contains raw HTML, emit patch-innerhtml on

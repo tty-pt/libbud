@@ -33,7 +33,7 @@ extern bud_node *bud_app_render(void);
 /**
  * @brief Host import: emit one patch operation to the browser adapter.
  */
-__attribute__((import_module("env"), import_name("bud_host_emit_patch"))) void
+__attribute__((import_module("bud"), import_name("bud_host_emit_patch"))) void
 bud_host_emit_patch(
         const char *op, size_t op_len, const char *a, size_t a_len,
         const char *b, size_t b_len, const char *c, size_t c_len);
