@@ -1,5 +1,7 @@
 #include "../include/bud/bud_jsx.h"
 #include "../include/bud/bud.h"
+#include "../include/bud/bud_slot.h"
+#include "../include/bud/bud_state.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -67,6 +69,29 @@ static int check(int cond, const char *msg)
 	fprintf(stderr, "bud test failed: %s\n", msg);
 	return 1;
 }
+
+static bud_node *test_slot_render_high(int slot_id, const void *state) {
+	(void)slot_id; (void)state;
+	return bud_element("high-priority");
+}
+
+static bud_node *test_slot_render_low(int slot_id, const void *state) {
+	(void)slot_id; (void)state;
+	return bud_element("low-priority");
+}
+
+static int test_slot_fill_fn(int slot_id, bud_node *parent, const void *state) {
+	(void)slot_id; (void)state;
+	bud_append(parent, bud_element("child"));
+	return 0;
+}
+
+#define TEST_STATE_SCHEMA(F, st) \
+	F(STR, st, title, 64, "") \
+	F(INT, st, score, 0, 0)
+
+BUD_DEFINE_STATE(test_state_t, TEST_STATE_SCHEMA)
+
 
 static int hydrate_lookup(
         void *user, unsigned int id, const char **kind, const char **tag,
@@ -1177,6 +1202,78 @@ int main(void)
 		bud_free(list2);
 		if (rc != 0)
 			return rc;
+	}
+
+	/* ── Test bud_slot ── */
+	{
+		bud_slot_reset();
+		bud_slot_contrib_t c_low = {
+			.slot_id = BUD_SLOT_PRIMARY_VIEW,
+			.priority = 10,
+			.name = "low",
+			.render = test_slot_render_low,
+			.fill = NULL
+		};
+		bud_slot_contrib_t c_high = {
+			.slot_id = BUD_SLOT_PRIMARY_VIEW,
+			.priority = 0,
+			.name = "high",
+			.render = test_slot_render_high,
+			.fill = NULL
+		};
+		bud_slot_contrib_t c_fill = {
+			.slot_id = BUD_SLOT_ACTIONS_DOCK,
+			.priority = 5,
+			.name = "fill",
+			.render = NULL,
+			.fill = test_slot_fill_fn
+		};
+		bud_slot_register(&c_low);
+		bud_slot_register(&c_high);
+		bud_slot_register(&c_fill);
+
+		bud_node *rendered = bud_slot_render(BUD_SLOT_PRIMARY_VIEW, NULL);
+		rc = check(rendered != NULL && strcmp(bud_node_tag(rendered), "high-priority") == 0,
+			"bud_slot_render honors ascending priority order");
+		bud_free(rendered);
+		if (rc != 0) return rc;
+
+		bud_node *dock = bud_element("dock");
+		int fill_count = bud_slot_fill(BUD_SLOT_ACTIONS_DOCK, dock, NULL);
+		rc = check(fill_count == 1 && bud_node_child_count(dock) == 1,
+			"bud_slot_fill appends children into parent");
+		bud_free(dock);
+		if (rc != 0) return rc;
+	}
+
+	/* ── Test bud_state ── */
+	{
+		test_state_t s1;
+		memset(&s1, 0, sizeof(s1));
+		snprintf(s1.title, sizeof(s1.title), "Hero");
+		s1.score = 42;
+
+		char json_buf[256];
+		int ser_len = test_state_t_serialize(&s1, json_buf, sizeof(json_buf));
+		rc = check(ser_len > 0 && strstr(json_buf, "\"title\":\"Hero\"") != NULL && strstr(json_buf, "\"score\":42") != NULL,
+			"bud_state serialization emits valid JSON");
+		if (rc != 0) return rc;
+
+		test_state_t s2;
+		memset(&s2, 0, sizeof(s2));
+		test_state_t_deserialize(&s2, json_buf, (size_t)ser_len);
+		rc = check(strcmp(s2.title, "Hero") == 0 && s2.score == 42,
+			"bud_state deserialization restores fields correctly");
+		if (rc != 0) return rc;
+	}
+
+	/* ── Test bud_set_key / lx_key ── */
+	{
+		bud_node *k_el = lx_n("div", lx_key("hero-card"));
+		rc = check(k_el != NULL && bud_get_key(k_el) != NULL && strcmp(bud_get_key(k_el), "hero-card") == 0,
+			"lx_key and bud_get_key handle stable node keys");
+		bud_free(k_el);
+		if (rc != 0) return rc;
 	}
 
 	rc = 0;

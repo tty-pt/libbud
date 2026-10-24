@@ -8,8 +8,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-__attribute__((import_module("env"), import_name("bud_host_log"))) void
-bud_host_log(const char *msg, size_t len);
+ISO_IMPORT(void, bud, bud_host_log, const char *msg, size_t len);
 #define WASM_LOG(msg)                                                          \
 	do {                                                                   \
 		const char *_m = (msg);                                        \
@@ -25,17 +24,10 @@ static void wasm_printf(const char *fmt, ...)
 	bud_host_log(buf, strlen(buf));
 }
 
-__attribute__((import_module("env"), import_name("bud_host_mark_dirty"))) void
-bud_host_mark_dirty(void);
-
-__attribute__((import_module("env"), import_name("bud_host_flush"))) void
-bud_host_flush(void);
-
-__attribute__((import_module("env"), import_name("bud_host_fetch"))) void
-bud_host_fetch(const char *url, size_t url_len, int request_id);
-
-__attribute__((import_module("env"), import_name("bud_host_set_location"))) void
-bud_host_set_location(const char *url, size_t url_len);
+ISO_IMPORT(void, bud, bud_host_mark_dirty, void);
+ISO_IMPORT(void, bud, bud_host_flush, void);
+ISO_IMPORT(void, bud, bud_host_fetch, const char *url, size_t url_len, int request_id);
+ISO_IMPORT(void, bud, bud_host_set_location, const char *url, size_t url_len);
 
 /* Platform host function pointers (declared in bud.h) */
 extern void (*bud_host_fetch_fn)(const char *, size_t, int);
@@ -72,7 +64,7 @@ static int emit_patch_wrapper(
 	return 0;
 }
 
-__attribute__((export_name("bud_app_mount"))) void wasm_mount(void)
+ISO_EXPORT_AS(void, wasm_mount, bud_app_mount)
 {
 	bud_host_emit_patch("MOUNT_START", 11, NULL, 0, NULL, 0, NULL, 0);
 	if (!runtime) {
@@ -98,14 +90,15 @@ void bud_app_set_state(void)
 
 	bud_runtime_free(runtime);
 	runtime = bud_runtime_new(new_root);
+	bud_runtime_mount(runtime);
 }
 
-__attribute__((export_name("bud_app_update"))) void wasm_update(void)
+ISO_EXPORT_AS(void, wasm_update, bud_app_update)
 {
 	bud_app_set_state();
 }
 
-__attribute__((export_name("bud_app_unmount"))) void wasm_unmount(void)
+ISO_EXPORT_AS(void, wasm_unmount, bud_app_unmount)
 {
 	if (runtime) {
 		bud_runtime_free(runtime);
@@ -113,20 +106,31 @@ __attribute__((export_name("bud_app_unmount"))) void wasm_unmount(void)
 	}
 }
 
-__attribute__((export_name("bud_app_mark_dirty"))) void wasm_mark_dirty(void)
+ISO_EXPORT_AS(void, wasm_mark_dirty, bud_app_mark_dirty)
 {
 	if (runtime) {
 		bud_runtime_mark_dirty(runtime);
 	}
 }
 
-__attribute__((export_name("bud_app_flush"))) void wasm_flush(void)
+ISO_EXPORT_AS(void, wasm_flush, bud_app_flush)
 {
 	bud_host_emit_patch("DEBUG_FLUSH", 11, NULL, 0, NULL, 0, NULL, 0);
 	if (runtime) {
 		bud_render_patch_ops(
 		        bud_runtime_root(runtime), emit_patch_wrapper, NULL);
 		bud_runtime_flush(runtime);
+	}
+}
+
+__attribute__((weak)) ISO_EXPORT(void, wasm_tick, float dt, int width, int height)
+{
+	(void)dt;
+	(void)width;
+	(void)height;
+	extern void wasm_canvas_render(void) __attribute__((weak));
+	if (wasm_canvas_render) {
+		wasm_canvas_render();
 	}
 }
 
@@ -171,8 +175,7 @@ void bud_patch_text(bud_node *node, const char *value)
 	        id_str, strlen(id_str), NULL, 0);
 }
 
-__attribute__((export_name("bud_patch_innerhtml"))) void
-bud_patch_innerhtml(unsigned int node_id, const char *html)
+ISO_EXPORT(void, bud_patch_innerhtml, unsigned int node_id, const char *html)
 {
 	if (!html)
 		return;
@@ -183,7 +186,7 @@ bud_patch_innerhtml(unsigned int node_id, const char *html)
 	        strlen(html), NULL, 0);
 }
 
-__attribute__((export_name("bud_app_dispatch"))) int wasm_dispatch_event(
+ISO_EXPORT_AS(int, wasm_dispatch_event, bud_app_dispatch,
         unsigned int node_id, const char *event_name, int bubbles,
         void *event_data)
 {
@@ -195,13 +198,6 @@ __attribute__((export_name("bud_app_dispatch"))) int wasm_dispatch_event(
 			        runtime, target, event_name, event_data);
 			return ret;
 		}
-		char html[256];
-		snprintf(html, sizeof(html), "node %d not found", node_id);
-		char idstr[16];
-		snprintf(idstr, sizeof(idstr), "%u", bud_node_id(root));
-		bud_host_emit_patch(
-		        "patch-raw", 9, html, strlen(html), idstr,
-		        strlen(idstr), NULL, 0);
 		wasm_printf("dispatch: node=%d NOT FOUND\n", node_id);
 		return -2;
 	}
@@ -210,7 +206,7 @@ __attribute__((export_name("bud_app_dispatch"))) int wasm_dispatch_event(
 
 /* ── Debug exports ── */
 
-__attribute__((export_name("wasm_dump_tree"))) void wasm_dump_tree(void)
+ISO_EXPORT(void, wasm_dump_tree, void)
 {
 	bud_node *root;
 
@@ -229,8 +225,7 @@ __attribute__((export_name("wasm_dump_tree"))) void wasm_dump_tree(void)
 	WASM_LOG("--- end tree ---");
 }
 
-__attribute__((export_name("wasm_get_tree_text"))) const char *
-wasm_get_tree_text(void)
+ISO_EXPORT(const char *, wasm_get_tree_text, void)
 {
 	bud_node *root;
 
@@ -247,8 +242,7 @@ wasm_get_tree_text(void)
 	return wasm_dbg_buf;
 }
 
-__attribute__((export_name("wasm_get_src"))) const char *
-wasm_get_src(unsigned int node_id)
+ISO_EXPORT(const char *, wasm_get_src, unsigned int node_id)
 {
 	bud_node *root;
 	bud_node *target;
@@ -366,5 +360,12 @@ const char *wasm_get_src(unsigned int node_id)
 
 void bud_app_set_state(void)
 {}
+
+void wasm_tick(float dt, int width, int height)
+{
+	(void)dt;
+	(void)width;
+	(void)height;
+}
 
 #endif

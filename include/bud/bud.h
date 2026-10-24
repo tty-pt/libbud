@@ -275,6 +275,26 @@ int bud_set_bool_attr(bud_node *node, const char *name);
 const char *bud_get_attr(const bud_node *node, const char *name);
 
 /**
+ * @brief Set a stable key on a node for resilient hydration.
+ * @param[in] node Target node.
+ * @param[in] key  Key value.
+ * @return 0 on success.
+ */
+static inline int bud_set_key(bud_node *node, const char *key) {
+	return bud_set_attr(node, "data-bud-key", key);
+}
+
+/**
+ * @brief Get the stable key of a node, or NULL if unset.
+ * @param[in] node Target node.
+ * @return Key value, or NULL.
+ */
+static inline const char *bud_get_key(const bud_node *node) {
+	return bud_get_attr(node, "data-bud-key");
+}
+
+
+/**
  * @brief Add a CSS class to a node.
  * @param[in] node Target node.
  * @param[in] cls  Class name.

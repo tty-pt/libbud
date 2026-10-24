@@ -100,6 +100,8 @@ typedef struct bud_arg {
 /** @brief Handler binding argument. */
 #define lx_bind(e, b, h)                                                       \
 	((bud_arg){ .type = BUD_ARG_BIND, .data.bind = { (e), (b), (h) } })
+/** @brief Keyed element argument for resilient hydration. */
+#define lx_key(k) lx_attr("data-bud-key", (k))
 
 /**
  * @brief Assemble an element from builder arguments.
