@@ -1,4 +1,4 @@
-## [1.0.2]
+## [1.1.0]
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/tty-pt/libbud/main/assets/logo.png" alt="libbud logo" width="220" />
