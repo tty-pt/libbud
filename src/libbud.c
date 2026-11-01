@@ -45,6 +45,10 @@ struct bud_node {
 	bud_lifecycle_fn on_unmount;
 	void *lifecycle_user;
 	int mounted;
+	/* Set on a root that came out of bud_vdom_diff: its ids are now the ids
+	 * the DOM carries (matched nodes inherit, inserted nodes got fresh ones),
+	 * so bud_prepare_render must not renumber it DFS again. */
+	int ids_frozen;
 	BUD_SRC_FIELDS
 };
 
@@ -374,6 +378,9 @@ static unsigned int bud_assign_ids(bud_node *node, unsigned int next_id)
 
 static void bud_prepare_render(bud_node *root)
 {
+	if (root && root->ids_frozen) {
+		return;
+	}
 	bud_assign_ids(root, 0);
 }
 
@@ -2275,8 +2282,24 @@ int bud_render_hydration_ops(const bud_node *root, bud_emit_fn emit, void *user)
 	return bud_render_ops_node(root, emit, user);
 }
 
+/* parent_id: when non-NULL the id of the live element this node is inserted
+ * into. A diff that adds a node has to say where: the host cannot guess the
+ * parent from whatever element its last patch happened to leave open. Only the
+ * top node of an inserted subtree carries it; descendants nest on the host's
+ * open-element stack as usual. */
+static int bud_render_patch_ops_node_at(
+        const bud_node *node, const char *parent_id, bud_emit_fn emit,
+        void *user);
+
 static int
 bud_render_patch_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
+{
+	return bud_render_patch_ops_node_at(node, NULL, emit, user);
+}
+
+static int bud_render_patch_ops_node_at(
+        const bud_node *node, const char *parent_id, bud_emit_fn emit,
+        void *user)
 {
 	const bud_attr *attr;
 	const bud_listener *listener;
@@ -2296,7 +2319,7 @@ bud_render_patch_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 
 	switch (node->kind) {
 	case BUD_NODE_FRAGMENT:
-		if (emit(user, "patch-open", "fragment", id_buf, NULL) != 0) {
+		if (emit(user, "patch-open", "fragment", id_buf, parent_id) != 0) {
 			return -1;
 		}
 		for (child = node->first_child; child;
@@ -2310,7 +2333,7 @@ bud_render_patch_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 		               ? -1
 		               : 0;
 	case BUD_NODE_ELEMENT:
-		if (emit(user, "patch-open", node->tag, id_buf, NULL) != 0) {
+		if (emit(user, "patch-open", node->tag, id_buf, parent_id) != 0) {
 			return -1;
 		}
 		for (attr = node->attrs; attr; attr = attr->next) {
@@ -2343,11 +2366,11 @@ bud_render_patch_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 		               ? -1
 		               : 0;
 	case BUD_NODE_TEXT:
-		return emit(user, "patch-text", node->text, id_buf, NULL) != 0
+		return emit(user, "patch-text", node->text, id_buf, parent_id) != 0
 		               ? -1
 		               : 0;
 	case BUD_NODE_RAW_HTML:
-		return emit(user, "patch-raw", node->text, id_buf, NULL) != 0
+		return emit(user, "patch-raw", node->text, id_buf, parent_id) != 0
 		               ? -1
 		               : 0;
 	default:
@@ -2392,8 +2415,41 @@ static const char *bud_get_node_key(const bud_node *node)
 	return NULL;
 }
 
+/* Ids in a diffed tree are stable, not positional. Matched nodes keep the id
+ * the DOM already carries; every node the diff introduces (inserted or
+ * replaced subtrees) takes a fresh id above everything the old tree used, so
+ * it can never collide with a live node. Renumbering DFS after a structural
+ * change (as the first version did) silently re-pointed later nodes at the
+ * wrong DOM elements. */
+static unsigned int bud_diff_next_id;
+
+#define BUD_NO_PARENT ((unsigned int)-1)
+
+static unsigned int bud_max_id(const bud_node *node)
+{
+	unsigned int m = node ? node->id : 0;
+	for (const bud_node *c = node ? node->first_child : NULL; c;
+	     c = c->next_sibling)
+	{
+		unsigned int cm = bud_max_id(c);
+		if (cm > m)
+			m = cm;
+	}
+	return m;
+}
+
+static void bud_assign_fresh_ids(bud_node *node)
+{
+	if (!node)
+		return;
+	node->id = bud_diff_next_id++;
+	for (bud_node *c = node->first_child; c; c = c->next_sibling)
+		bud_assign_fresh_ids(c);
+}
+
 static int bud_vdom_diff_node(
-        bud_node *old_node, bud_node *new_node, bud_emit_fn emit, void *user)
+        bud_node *old_node, bud_node *new_node, unsigned int parent_id,
+        bud_emit_fn emit, void *user)
 {
 	char id_buf[32];
 	const bud_attr *new_attr, *old_attr;
@@ -2404,7 +2460,13 @@ static int bud_vdom_diff_node(
 		return 0;
 
 	if (!old_node && new_node) {
-		return bud_render_patch_ops_node(new_node, emit, user);
+		char parent_buf[32];
+		bud_assign_fresh_ids(new_node);
+		if (parent_id == BUD_NO_PARENT)
+			return bud_render_patch_ops_node(new_node, emit, user);
+		snprintf(parent_buf, sizeof(parent_buf), "%u", parent_id);
+		return bud_render_patch_ops_node_at(
+		        new_node, parent_buf, emit, user);
 	}
 
 	if (old_node && !new_node) {
@@ -2423,7 +2485,8 @@ static int bud_vdom_diff_node(
 	    (old_node->kind == BUD_NODE_ELEMENT &&
 	     strcmp(old_node->tag, new_node->tag) != 0))
 	{
-		bud_assign_ids(new_node, old_node->id);
+		for (bud_node *c = new_node->first_child; c; c = c->next_sibling)
+			bud_assign_fresh_ids(c);
 		bud_buf b;
 		bud_buf_init(&b);
 		if (bud_render_hydrated_html_node(new_node, &b) != 0) {
@@ -2502,6 +2565,9 @@ static int bud_vdom_diff_node(
 			const char *nt = new_node->first_child->text
 			                         ? new_node->first_child->text
 			                         : "";
+			/* The raw child is never visited below: give it the id of the
+			 * one it replaces so no stale DFS number is left behind. */
+			new_node->first_child->id = old_node->first_child->id;
 			if (strcmp(ot, nt) != 0) {
 				return emit(
 				        user, "patch-innerhtml", id_buf, nt,
@@ -2568,12 +2634,13 @@ static int bud_vdom_diff_node(
 				matched[found_idx] = 1;
 				if (bud_vdom_diff_node(
 				            (bud_node *)old_children[found_idx],
-				            (bud_node *)nc, emit, user) != 0)
+				            (bud_node *)nc, old_node->id, emit,
+				            user) != 0)
 					return -1;
 			} else {
 				if (bud_vdom_diff_node(
-				            NULL, (bud_node *)nc, emit, user) !=
-				    0)
+				            NULL, (bud_node *)nc, old_node->id,
+				            emit, user) != 0)
 					return -1;
 			}
 		}
@@ -2582,7 +2649,7 @@ static int bud_vdom_diff_node(
 			if (!matched[i]) {
 				if (bud_vdom_diff_node(
 				            (bud_node *)old_children[i], NULL,
-				            emit, user) != 0)
+				            old_node->id, emit, user) != 0)
 					return -1;
 			}
 		}
@@ -2597,8 +2664,8 @@ static int bud_vdom_diff_node(
 		const bud_node *next_new =
 		        new_child ? new_child->next_sibling : NULL;
 		if (bud_vdom_diff_node(
-		            (bud_node *)old_child, (bud_node *)new_child, emit,
-		            user) != 0)
+		            (bud_node *)old_child, (bud_node *)new_child,
+		            old_node->id, emit, user) != 0)
 			return -1;
 		old_child = next_old;
 		new_child = next_new;
@@ -2614,11 +2681,17 @@ int bud_vdom_diff(
 		return -1;
 	if (!old_root && !new_root)
 		return 0;
+	int rc;
+
 	if (old_root)
 		bud_prepare_render(old_root);
 	if (new_root)
 		bud_prepare_render(new_root);
-	return bud_vdom_diff_node(old_root, new_root, emit, user);
+	bud_diff_next_id = old_root ? bud_max_id(old_root) + 1 : 0;
+	rc = bud_vdom_diff_node(old_root, new_root, BUD_NO_PARENT, emit, user);
+	if (new_root && rc == 0)
+		new_root->ids_frozen = 1;
+	return rc;
 }
 
 int bud_hydrate(const bud_node *root, bud_hydrate_lookup_fn lookup, void *user)

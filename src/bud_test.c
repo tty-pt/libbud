@@ -1204,6 +1204,79 @@ int main(void)
 			return rc;
 	}
 
+	/* ── Test stable ids across structural diffs ── */
+	{
+		/* A list that grows must not shift the ids of the nodes after it:
+		 * the DOM still carries the old ones, so a later patch aimed at
+		 * the tail would otherwise hit the wrong element. */
+		bud_node *a = bud_element("div");
+		bud_node *a_ul = bud_element("ul");
+		bud_node *a_p = bud_element("p");
+		bud_append(a_ul, bud_element("li"));
+		bud_append(a, a_ul);
+		bud_append(a_p, bud_text("tail"));
+		bud_append(a, a_p);
+		bud_node *b = bud_element("div");
+		bud_node *b_ul = bud_element("ul");
+		bud_node *b_p = bud_element("p");
+		for (int i = 0; i < 3; i++)
+			bud_append(b_ul, bud_element("li"));
+		bud_append(b, b_ul);
+		bud_append(b_p, bud_text("tail"));
+		bud_append(b, b_p);
+		bud_node *c = bud_element("div");
+		bud_node *c_ul = bud_element("ul");
+		bud_node *c_p = bud_element("p");
+		for (int i = 0; i < 3; i++)
+			bud_append(c_ul, bud_element("li"));
+		bud_append(c, c_ul);
+		bud_append(c_p, bud_text("changed"));
+		bud_append(c, c_p);
+
+		char *h = bud_render_hydrated_html(a); /* numbers a DFS, as the page does */
+		bud_free_string(h);
+		unsigned int ul_id = bud_node_id(a_ul);
+		unsigned int p_id = bud_node_id(a_p);
+		unsigned int max_old = p_id + 1; /* p's text child is the last live id */
+
+		test_ops grow = { { 0 }, 0 };
+		rc = bud_vdom_diff(a, b, test_emit, &grow);
+		const char *want_open = "patch-open:li:";
+		rc = check(rc == 0, "growing list diff");
+		if (rc == 0)
+			rc = check(strstr(grow.buffer, want_open) != NULL,
+			           "growing list inserts li");
+		/* each inserted li names the ul it goes into as the 3rd argument */
+		char want_parent[32];
+		snprintf(want_parent, sizeof(want_parent), ":%u\n", ul_id);
+		if (rc == 0)
+			rc = check(strstr(grow.buffer, want_parent) != NULL,
+			           "inserted li carries its parent id");
+		if (rc == 0)
+			rc = check(bud_node_id(b_p) == p_id,
+			           "tail node keeps its id after list growth");
+		for (unsigned i = 0; rc == 0 && i < 2; i++) {
+			const bud_node *li = i ? bud_node_child(b_ul, 2)
+			                       : bud_node_child(b_ul, 1);
+			rc = check(bud_node_id(li) > max_old,
+			           "inserted li id does not collide with live ids");
+		}
+
+		test_ops next = { { 0 }, 0 };
+		if (rc == 0)
+			rc = check(bud_vdom_diff(b, c, test_emit, &next) == 0,
+			           "second diff on a diffed tree");
+		/* a: div0 ul1 li2 p3 "tail"4. Growing the ul must leave p's text at 4. */
+		if (rc == 0)
+			rc = check(strstr(next.buffer, "patch-text:changed:4\n") != NULL,
+			           "tail text patch targets the original id");
+		bud_free(a);
+		bud_free(b);
+		bud_free(c);
+		if (rc != 0)
+			return rc;
+	}
+
 	/* ── Test bud_slot ── */
 	{
 		bud_slot_reset();

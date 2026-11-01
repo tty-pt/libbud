@@ -1,9 +1,5 @@
 ## [1.1.0]
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libbud/main/assets/logo.png" alt="libbud logo" width="220" />
-</p>
-
 - **Namespaced WASM Imports & Capability Boundary**:
   - Standardized namespaced `bud.*` host imports for DOM patching, runtime invalidation, and state synchronization.
   - Hardened WebAssembly guest/host capability allowlist (`wasm-allowed-imports.lst`).
