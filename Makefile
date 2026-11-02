@@ -2,7 +2,7 @@ FOLDER := bud
 all := libbud bud_test
 
 LDLIBS-libbud :=
-libbud-obj-y := src/bud_wasm_app.o
+libbud-obj-y :=
 LDLIBS-bud_test := -lbud
 
 include ../mk/include.mk

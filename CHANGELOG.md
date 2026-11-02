@@ -1,3 +1,11 @@
+## [1.2.0]
+
+- **Decoupled Pure UI Tree & VDOM Diff Engine**:
+  - Restored `external/libbud` to a pure, framework-neutral UI tree builder and VDOM differ without runtime slot management, browser execution assumptions, or host patch emissions.
+  - Purified `<bud/bud_app.h>`: eliminated `#if defined(__wasm__)` preprocessor branching, host patch emission imports, and runtime slot mounting declarations.
+  - Removed `src/bud_wasm_app.c` from the library build (`libbud.so`, `Makefile`, and `objects-set.mk`).
+  - Added pure C implementations of `bud_patch_attr`, `bud_patch_text`, and `bud_patch_innerhtml` directly in `libbud.c`.
+
 ## [1.1.0]
 
 - **Namespaced WASM Imports & Capability Boundary**:

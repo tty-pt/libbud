@@ -72,7 +72,7 @@ export function diffVdom(oldTree, newTree) {
     patches.push({ type: "REPLACE", op: "REPLACE", node: newTree });
   } else {
     if (oldTree.text !== newTree.text) {
-      patches.push({ type: "SET_TEXT", op: "SET_TEXT", text: newTree.text });
+      patches.push({ type: "SET_TEXT", op: "SET_TEXT", text: newTree.text, a: newTree.text });
     }
   }
   return patches;
