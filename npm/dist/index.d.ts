@@ -20,4 +20,6 @@ export interface VdomPatch {
 
 export declare function diffVdom(oldTree: BudNode | null, newTree: BudNode | null): VdomPatch[];
 
+export declare function getBudWasm(): WebAssembly.Instance;
+
 export declare function version(): string;

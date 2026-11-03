@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tty-pt/libbud/main/assets/logo.png" alt="@ttypt/bud logo" width="220" />
+  <img src="https://raw.githubusercontent.com/tty-pt/libbud/main/assets/logo.png" alt="@tty-pt/bud logo" width="220" />
 </p>
 
-# @ttypt/bud
+# @tty-pt/bud
 
 [![npm version](https://img.shields.io/badge/npm-v0.1.0-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
@@ -18,11 +18,11 @@
 ## 1. Quickstart
 
 ```bash
-npm install @ttypt/bud
+npm install @tty-pt/bud
 ```
 
 ```typescript
-import { h, diffVdom } from "@ttypt/bud";
+import { h, diffVdom } from "@tty-pt/bud";
 
 // 1. Build virtual DOM node tree
 const vdom = h("div", { class: "card" }, [
@@ -40,14 +40,52 @@ const updatedVdom = h("div", { class: "card" }, [
 ]);
 
 const patches = diffVdom(vdom, updatedVdom);
+console.log(patches);
+// [ { type: 'patch-text', op: 'patch-text', a: 'Status: Suspended', text: 'Status: Suspended' } ]
 ```
 
 ---
 
-## 2. C Development Headers via NPM
+## 2. JavaScript / TypeScript API Reference
+
+### `h(tag: string, attrs?: Record<string, string>, children?: Array<BudNode | string>): BudNode`
+Declarative factory mirroring C `bud_node_create()`.
+
+### `BudNode`
+Represents a virtual DOM node with chainable mutation methods:
+* `.attr(key: string, value: string): this`
+* `.child(node: BudNode | string): this`
+* `.setText(text: string): this`
+* `.render(): string` — Emits compliant isomorphic HTML markup.
+
+### `diffVdom(oldTree: BudNode | null, newTree: BudNode | null): VdomPatch[]`
+Calculates minimal DOM patch operations between two VDOM trees. **Executes strictly in compiled WebAssembly** (`bud_vdom_diff`) or native Node-API (`bud_node.node`), with zero duplicate JavaScript diffing algorithms.
+
+Returns an array of `VdomPatch` objects:
+```typescript
+interface VdomPatch {
+  type: "MOUNT" | "UNMOUNT" | "REPLACE" | "SET_TEXT" | "patch-text" | string;
+  op: string;
+  a?: string;
+  b?: string;
+  c?: string;
+  text?: string;
+  node?: BudNode;
+}
+```
+
+### `getBudWasm(): WebAssembly.Instance`
+Direct accessor returning the underlying compiled WebAssembly instance (`dist/bud.wasm`) loaded with `bud_vdom_diff`, `bud_element`, `bud_text`, and memory allocators.
+
+### `version(): string`
+Returns the library semantic version string.
+
+---
+
+## 3. C Development Headers via NPM
 
 ```makefile
-CFLAGS += -I./node_modules/@ttypt/bud/include
+CFLAGS += -I./node_modules/@tty-pt/bud/include
 LDLIBS += -lbud
 ```
 

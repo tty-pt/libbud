@@ -42,7 +42,12 @@ __attribute__((constructor)) static void wasm_platform_init(void)
 }
 
 static bud_runtime *runtime = NULL;
+#define BUD_MAX_SLOTS 4
+static bud_runtime *g_slot_runtimes[BUD_MAX_SLOTS];
+static bud_node *(*g_slot_render_fns[BUD_MAX_SLOTS])(void);
 static char wasm_dbg_buf[65536];
+
+extern bud_node *bud_app_render(void) __attribute__((weak));
 
 static int noop_emit(
         void *user, const char *op, const char *a, const char *b, const char *c)
@@ -58,20 +63,80 @@ static int noop_emit(
 static int emit_patch_wrapper(
         void *user, const char *op, const char *a, const char *b, const char *c)
 {
+	(void)user;
 	bud_host_emit_patch(
 	        op, op ? strlen(op) : 0, a, a ? strlen(a) : 0, b,
 	        b ? strlen(b) : 0, c, c ? strlen(c) : 0);
 	return 0;
 }
 
+int bud_slot_mount(int slot, bud_node *(*render_fn)(void))
+{
+	bud_host_fetch_fn = bud_host_fetch;
+	bud_host_log_fn = bud_host_log;
+	bud_host_set_location_fn = bud_host_set_location;
+
+	if (slot < 0 || slot >= BUD_MAX_SLOTS || !render_fn)
+		return -1;
+	g_slot_render_fns[slot] = render_fn;
+	if (g_slot_runtimes[slot]) {
+		bud_runtime_free(g_slot_runtimes[slot]);
+		g_slot_runtimes[slot] = NULL;
+	}
+	bud_node *root = render_fn();
+	if (root) {
+		bud_render_ops(root, noop_emit, NULL);
+		g_slot_runtimes[slot] = bud_runtime_new(root);
+		bud_runtime_mount(g_slot_runtimes[slot]);
+		if (slot == 1 || !runtime) runtime = g_slot_runtimes[slot];
+	}
+	return 0;
+}
+
+int bud_slot_update(int slot, bud_node *(*render_fn)(void))
+{
+	if (slot < 0 || slot >= BUD_MAX_SLOTS)
+		return -1;
+	if (!render_fn)
+		render_fn = g_slot_render_fns[slot];
+	if (!render_fn)
+		return -1;
+#if defined(__wasm__)
+	if (g_slot_runtimes[slot]) {
+		bud_node *old_root = bud_runtime_root(g_slot_runtimes[slot]);
+		bud_node *new_root = render_fn();
+		if (new_root) {
+			bud_vdom_diff(old_root, new_root, emit_patch_wrapper, (void *)(intptr_t)slot);
+			bud_runtime_free(g_slot_runtimes[slot]);
+			g_slot_runtimes[slot] = bud_runtime_new(new_root);
+			bud_runtime_mount(g_slot_runtimes[slot]);
+			if (slot == 1 || !runtime) runtime = g_slot_runtimes[slot];
+		}
+	}
+#endif
+	return 0;
+}
+
+void bud_slot_cleanup(int slot)
+{
+	if (slot >= 0 && slot < BUD_MAX_SLOTS && g_slot_runtimes[slot]) {
+		if (runtime == g_slot_runtimes[slot]) runtime = NULL;
+		g_slot_render_fns[slot] = NULL;
+		bud_runtime_free(g_slot_runtimes[slot]);
+		g_slot_runtimes[slot] = NULL;
+	}
+}
+
 ISO_EXPORT_AS(void, wasm_mount, bud_app_mount)
 {
 	bud_host_emit_patch("MOUNT_START", 11, NULL, 0, NULL, 0, NULL, 0);
-	if (!runtime) {
+	if (!runtime && bud_app_render) {
 		bud_node *app = bud_app_render();
-		bud_render_ops(app, noop_emit, NULL);
-		runtime = bud_runtime_new(app);
-		bud_runtime_mount(runtime);
+		if (app) {
+			bud_render_ops(app, noop_emit, NULL);
+			runtime = bud_runtime_new(app);
+			bud_runtime_mount(runtime);
+		}
 		bud_host_emit_patch(
 		        "MOUNT_DONE", 10, NULL, 0, NULL, 0, NULL, 0);
 	}
@@ -79,7 +144,15 @@ ISO_EXPORT_AS(void, wasm_mount, bud_app_mount)
 
 void bud_app_set_state(void)
 {
-	if (!runtime)
+	if (g_slot_runtimes[1] && g_slot_render_fns[1]) {
+		bud_slot_update(1, g_slot_render_fns[1]);
+		return;
+	}
+	if (g_slot_runtimes[0] && g_slot_render_fns[0]) {
+		bud_slot_update(0, g_slot_render_fns[0]);
+		return;
+	}
+	if (!runtime || !bud_app_render)
 		return;
 	bud_node *old_root = bud_runtime_root(runtime);
 	bud_node *new_root = bud_app_render();
@@ -186,22 +259,47 @@ ISO_EXPORT(void, bud_patch_innerhtml, unsigned int node_id, const char *html)
 	        strlen(html), NULL, 0);
 }
 
-ISO_EXPORT_AS(int, wasm_dispatch_event, bud_app_dispatch,
-        unsigned int node_id, const char *event_name, int bubbles,
-        void *event_data)
+int bud_slot_dispatch_event(int slot, unsigned int node_id, const char *event_name, int bubbles, void *event_data)
 {
+	(void)bubbles;
+	if (slot < 0 || slot >= BUD_MAX_SLOTS || !g_slot_runtimes[slot])
+		return -1;
+	bud_node *root = bud_runtime_root(g_slot_runtimes[slot]);
+	bud_node *target = find_node_by_id(root, node_id);
+	if (!target)
+		return -2;
+	return bud_runtime_dispatch(g_slot_runtimes[slot], target, event_name, event_data);
+}
+
+int bud_slot_dispatch_any(unsigned int node_id, const char *event_name, int bubbles, void *event_data)
+{
+	(void)bubbles;
+	int order[] = { 1, 0, 2, 3 };
+	for (size_t i = 0; i < sizeof(order)/sizeof(order[0]); i++) {
+		int s = order[i];
+		if (g_slot_runtimes[s]) {
+			bud_node *root = bud_runtime_root(g_slot_runtimes[s]);
+			bud_node *target = find_node_by_id(root, node_id);
+			if (target) {
+				return bud_runtime_dispatch(g_slot_runtimes[s], target, event_name, event_data);
+			}
+		}
+	}
 	if (runtime) {
 		bud_node *root = bud_runtime_root(runtime);
 		bud_node *target = find_node_by_id(root, node_id);
 		if (target) {
-			int ret = bud_runtime_dispatch(
-			        runtime, target, event_name, event_data);
-			return ret;
+			return bud_runtime_dispatch(runtime, target, event_name, event_data);
 		}
-		wasm_printf("dispatch: node=%d NOT FOUND\n", node_id);
-		return -2;
 	}
 	return -1;
+}
+
+ISO_EXPORT_AS(int, wasm_dispatch_event, bud_app_dispatch,
+        unsigned int node_id, const char *event_name, int bubbles,
+        void *event_data)
+{
+	return bud_slot_dispatch_any(node_id, event_name, bubbles, event_data);
 }
 
 /* ── Debug exports ── */
@@ -227,13 +325,16 @@ ISO_EXPORT(void, wasm_dump_tree, void)
 
 ISO_EXPORT(const char *, wasm_get_tree_text, void)
 {
-	bud_node *root;
+	bud_node *root = NULL;
 
-	if (!runtime) {
-		wasm_dbg_buf[0] = '\0';
-		return wasm_dbg_buf;
+	if (g_slot_runtimes[1]) {
+		root = bud_runtime_root(g_slot_runtimes[1]);
+	} else if (g_slot_runtimes[0]) {
+		root = bud_runtime_root(g_slot_runtimes[0]);
+	} else if (runtime) {
+		root = bud_runtime_root(runtime);
 	}
-	root = bud_runtime_root(runtime);
+
 	if (!root) {
 		wasm_dbg_buf[0] = '\0';
 		return wasm_dbg_buf;
@@ -366,6 +467,44 @@ void wasm_tick(float dt, int width, int height)
 	(void)dt;
 	(void)width;
 	(void)height;
+}
+
+int bud_slot_mount(int slot, bud_node *(*render_fn)(void))
+{
+	(void)slot;
+	(void)render_fn;
+	return 0;
+}
+
+int bud_slot_update(int slot, bud_node *(*render_fn)(void))
+{
+	(void)slot;
+	(void)render_fn;
+	return 0;
+}
+
+int bud_slot_dispatch_event(int slot, unsigned int node_id, const char *event_name, int bubbles, void *event_data)
+{
+	(void)slot;
+	(void)node_id;
+	(void)event_name;
+	(void)bubbles;
+	(void)event_data;
+	return -1;
+}
+
+int bud_slot_dispatch_any(unsigned int node_id, const char *event_name, int bubbles, void *event_data)
+{
+	(void)node_id;
+	(void)event_name;
+	(void)bubbles;
+	(void)event_data;
+	return -1;
+}
+
+void bud_slot_cleanup(int slot)
+{
+	(void)slot;
 }
 
 #endif

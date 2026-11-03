@@ -1,3 +1,19 @@
+## [1.2.1] - 2026-11-03
+
+- **Standalone `@tty-pt/bud` Package & Pure WebAssembly Differ**:
+  - Published `@tty-pt/bud` on npm with zero external dependencies.
+  - Bundled standalone `bud.wasm` compiled directly from `src/libbud.c` and `wasm/bud_wasm.c`.
+  - Migrated build to centralized `make wasm` rule in `external/mk/include.mk` with `-ffreestanding -flto -O3` and post-link `wasm-opt -O3` optimization (reducing binary size from 167 KB to 138 KB).
+  - Uses `@tty-pt/stele`'s unified memory substrate for string marshalling and patch emissions.
+
+## [1.2.0]
+
+- **Decoupled Pure UI Tree & VDOM Diff Engine**:
+  - Restored `external/libbud` to a pure, framework-neutral UI tree builder and VDOM differ without runtime slot management, browser execution assumptions, or host patch emissions.
+  - Purified `<bud/bud_app.h>`: eliminated `#if defined(__wasm__)` preprocessor branching, host patch emission imports, and runtime slot mounting declarations.
+  - Removed `src/bud_wasm_app.c` from the library build (`libbud.so`, `Makefile`, and `objects-set.mk`).
+  - Added pure C implementations of `bud_patch_attr`, `bud_patch_text`, and `bud_patch_innerhtml` directly in `libbud.c`.
+
 ## [1.1.0]
 
 - **Namespaced WASM Imports & Capability Boundary**:
