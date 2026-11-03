@@ -2,8 +2,11 @@ FOLDER := bud
 all := libbud bud_test
 
 LDLIBS-libbud :=
-libbud-obj-y := src/bud_wasm_app.o
+libbud-obj-y :=
 LDLIBS-bud_test := -lbud
+
+WASM_SRCS := src/libbud.c npm/wasm/bud_wasm.c
+WASM_EXPORTS := bud_element bud_text bud_set_attr bud_append bud_render_html bud_vdom_diff bud_free
 
 include ../mk/include.mk
 LDLIBS-alpine :=

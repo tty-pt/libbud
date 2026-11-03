@@ -1,6 +1,6 @@
 {
-  "name": "@ttypt/bud",
-  "version": "0.1.0",
+  "name": "@tty-pt/bud",
+  "version": "1.2.2",
   "type": "module",
   "description": "Universal Node.js and Browser bindings for libbud reactive VDOM diffing and UI tree builder",
   "main": "dist/index.js",
@@ -15,9 +15,15 @@
   ],
   "scripts": {
     "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include native/bud_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lbud -o build/Release/bud_node.node 2>/dev/null || true",
-    "build:wasm": "clang --target=wasm32-wasi -mexec-model=reactor -Wl,--no-entry -Wl,--allow-undefined -Wl,--export=malloc -Wl,--export=free -Wl,--export=bud_element -Wl,--export=bud_text -Wl,--export=bud_set_attr -Wl,--export=bud_append -Wl,--export=bud_render_html -Wl,--export=bud_vdom_diff -Wl,--export=bud_free -I../include -O3 -o dist/bud.wasm ../src/libbud.c",
+    "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
     "test": "node --test tests/bud.test.mjs"
+  },
+  "peerDependencies": {
+    "@tty-pt/stele": ">=1.5.0"
+  },
+  "devDependencies": {
+    "@tty-pt/stele": "^1.5.2"
   },
   "keywords": [
     "bud",

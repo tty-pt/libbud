@@ -4145,3 +4145,29 @@ void bud_slot_reset(void)
 	g_slot_contrib_count = 0;
 }
 
+__attribute__((weak)) void bud_patch_attr(bud_node *node, const char *name, const char *value)
+{
+	if (!node || !name || !value)
+		return;
+	bud_set_attr(node, name, value);
+}
+
+__attribute__((weak)) void bud_patch_text(bud_node *node, const char *value)
+{
+	if (!node || !value)
+		return;
+	free(node->text);
+	node->text = strdup(value);
+}
+
+void bud_patch_innerhtml(unsigned int node_id, const char *html)
+{
+	(void)node_id;
+	(void)html;
+}
+
+__attribute__((weak)) void bud_app_set_state(void)
+{
+}
+
+

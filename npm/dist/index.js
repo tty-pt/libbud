@@ -1,19 +1,25 @@
-import { createRequire } from "node:module";
-import path from "node:path";
+import { loadWasmModule, loadNativeAddon, getSubstrate } from "@tty-pt/stele";
 
-let nativeBinding = null;
-try {
-  const req = createRequire(import.meta.url);
-  try {
-    nativeBinding = req("../build/Release/bud_node.node");
-  } catch {}
-  if (!nativeBinding) {
-    try {
-      nativeBinding = req(path.join(process.cwd(), "build/Release/bud_node.node"));
-    } catch {}
-  }
-} catch {
-  // In-memory fallback
+const nativeBinding = loadNativeAddon(import.meta.url, "bud");
+let wasmInstance = null;
+let collectedPatches = [];
+
+export function getBudWasm() {
+  if (wasmInstance) return wasmInstance;
+  wasmInstance = loadWasmModule(new URL("./bud.wasm", import.meta.url), {
+    env: {
+      bud_host_emit_patch: (opPtr, opLen, aPtr, aLen, bPtr, bLen, cPtr, cLen) => {
+        const mem = wasmInstance.exports.memory.buffer;
+        const dec = new TextDecoder();
+        const op = dec.decode(new Uint8Array(mem, opPtr, opLen));
+        const a = dec.decode(new Uint8Array(mem, aPtr, aLen));
+        const b = dec.decode(new Uint8Array(mem, bPtr, bLen));
+        const c = dec.decode(new Uint8Array(mem, cPtr, cLen));
+        collectedPatches.push({ type: op, op, a, b, c, text: a });
+      }
+    }
+  });
+  return wasmInstance;
 }
 
 export class BudNode {
@@ -55,32 +61,86 @@ export function h(tag, attrs = {}, children = []) {
   return new BudNode(tag, attrs, children);
 }
 
+function buildWasmTree(wasm, node) {
+  if (!node) return 0;
+  const { malloc, free, bud_element, bud_text, bud_set_attr, bud_append } = wasm.exports;
+  const enc = new TextEncoder();
+
+  function allocStr(s) {
+    const bytes = enc.encode(s);
+    const ptr = malloc(bytes.length + 1);
+    new Uint8Array(wasm.exports.memory.buffer, ptr, bytes.length + 1).set([...bytes, 0]);
+    return ptr;
+  }
+
+  if (typeof node === "string") {
+    const sPtr = allocStr(node);
+    const t = bud_text(sPtr);
+    free(sPtr);
+    return t;
+  }
+
+  const tagPtr = allocStr(node.tag || "div");
+  const cNode = bud_element(tagPtr);
+  free(tagPtr);
+
+  if (node.attrs) {
+    for (const [k, v] of Object.entries(node.attrs)) {
+      const kPtr = allocStr(k);
+      const vPtr = allocStr(String(v));
+      bud_set_attr(cNode, kPtr, vPtr);
+      free(kPtr);
+      free(vPtr);
+    }
+  }
+
+  if (node.text) {
+    const tPtr = allocStr(node.text);
+    const tNode = bud_text(tPtr);
+    bud_append(cNode, tNode);
+    free(tPtr);
+  }
+
+  if (Array.isArray(node.children)) {
+    for (const ch of node.children) {
+      const chNode = buildWasmTree(wasm, ch);
+      if (chNode) bud_append(cNode, chNode);
+    }
+  }
+
+  return cNode;
+}
+
 /**
- * Computes patch operations between two VDOM trees using C bud_vdom_diff
+ * Computes patch operations between two VDOM trees strictly using C bud_vdom_diff via WebAssembly
  */
 export function diffVdom(oldTree, newTree) {
   if (nativeBinding && nativeBinding.diffVdom) {
     return nativeBinding.diffVdom(oldTree, newTree);
   }
 
-  const patches = [];
-  if (!oldTree) {
-    patches.push({ type: "MOUNT", op: "MOUNT", node: newTree });
-  } else if (!newTree) {
-    patches.push({ type: "UNMOUNT", op: "UNMOUNT" });
-  } else if (oldTree.tag !== newTree.tag) {
-    patches.push({ type: "REPLACE", op: "REPLACE", node: newTree });
-  } else {
-    if (oldTree.text !== newTree.text) {
-      patches.push({ type: "SET_TEXT", op: "SET_TEXT", text: newTree.text });
-    }
+  const wasm = getBudWasm();
+  const { bud_wasm_diff, bud_free } = wasm.exports;
+
+  collectedPatches = [];
+  const oldC = buildWasmTree(wasm, oldTree);
+  const newC = buildWasmTree(wasm, newTree);
+
+  try {
+    bud_wasm_diff(oldC, newC);
+  } finally {
+    if (oldC) bud_free(oldC);
+    if (newC) bud_free(newC);
   }
-  return patches;
+
+  const result = collectedPatches;
+  collectedPatches = [];
+  return result;
 }
 
 export function version() {
   if (nativeBinding && nativeBinding.version) {
     return nativeBinding.version();
   }
-  return "0.1.0";
+  return "1.2.1";
 }

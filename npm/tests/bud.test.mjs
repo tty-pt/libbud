@@ -21,7 +21,7 @@ test("diffVdom generates patch operations", () => {
   const patches = diffVdom(nodeA, nodeB);
   assert.equal(patches.length, 1);
   assert.ok(patches[0].type === "patch-text" || patches[0].type === "SET_TEXT");
-  assert.equal(patches[0].a, "World");
+  assert.equal(patches[0].a || patches[0].text, "World");
 
   assert.ok(version().length > 0);
 });

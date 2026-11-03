@@ -4,7 +4,7 @@
 
 # libbud
 
-[![npm](https://img.shields.io/badge/npm-@ttypt/bud-CB3837?logo=npm)](npm/README.md)
+[![npm](https://img.shields.io/badge/npm-@tty-pt/bud-CB3837?logo=npm)](npm/README.md)
 [![C99](https://img.shields.io/badge/C-C99-555?logo=c)](#)
 [![BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![No dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)](#)
@@ -121,11 +121,11 @@ sudo make install     # install headers and library to system
 
 ---
 
-## 6. JavaScript & WebAssembly Bindings (@ttypt/bud)
+## 6. JavaScript & WebAssembly Bindings (@tty-pt/bud)
 
 Official Node.js and Browser WebAssembly bindings are colocated in [`npm/`](npm/README.md):
 - **Universal Engine**: Reactive virtual DOM builder (`h`), node diffing (`diffVdom`), and patch operations for isomorphic rendering.
-- **C Development Headers**: Install via `npm install @ttypt/bud` and consume headers from `node_modules/@ttypt/bud/include`.
+- **C Development Headers**: Install via `npm install @tty-pt/bud` and consume headers from `node_modules/@tty-pt/bud/include`.
 
 👉 *For complete TypeScript usage, VDOM diffing guides, and API reference, see [npm/README.md](npm/README.md).*
 
