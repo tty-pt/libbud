@@ -2521,10 +2521,16 @@ static int bud_vdom_diff_node(
 		     new_attr = new_attr->next)
 		{
 			old_attr = bud_attr_find(old_node, new_attr->name);
-			const char *nv = new_attr->value ? new_attr->value : "";
-			if (!old_attr ||
-			    strcmp(old_attr->value ? old_attr->value : "",
-			           nv) != 0)
+			const char *nv = new_attr->value
+			        ? new_attr->value
+			        : (new_attr->is_boolean ? new_attr->name : "");
+			const char *ov = old_attr
+			        ? (old_attr->value ? old_attr->value
+			                           : (old_attr->is_boolean
+			                                      ? old_attr->name
+			                                      : ""))
+			        : NULL;
+			if (!old_attr || strcmp(ov, nv) != 0)
 			{
 				if (emit(user, "patch-attr", id_buf,
 				         new_attr->name, nv) != 0)
