@@ -1,3 +1,14 @@
+## [Unreleased] (target: v1.3.0)
+
+### Added
+- **Client Hydration Engine (`htdocs/bud-hydrate.js`, `npm/dist/bud-hydrate.js`)**:
+  - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment.
+  - Enhanced `include/bud/bud_state.h` state management and serialization helpers.
+  - Batched capability bridge remounting via microtask scheduling (`queueMicrotask` / `setTimeout`) across patch replay boundaries to prevent bridge thrashing.
+
+### Changed
+- Refactored `src/libbud.c` VDOM diffing and tree traversal operations.
+
 ## [1.2.2] - 2026-11-03
 
 - **Decoupled Pure UI Tree & VDOM Diff Engine**:
