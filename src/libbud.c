@@ -2409,6 +2409,9 @@ static const char *bud_get_node_key(const bud_node *node)
 	const bud_attr *attr = bud_attr_find((bud_node *)node, "data-key");
 	if (attr && attr->value && attr->value[0])
 		return attr->value;
+	attr = bud_attr_find((bud_node *)node, "data-bud-key");
+	if (attr && attr->value && attr->value[0])
+		return attr->value;
 	attr = bud_attr_find((bud_node *)node, "key");
 	if (attr && attr->value && attr->value[0])
 		return attr->value;
@@ -2547,13 +2550,25 @@ static int bud_vdom_diff_node(
 			}
 		}
 
-		/* Emit patch-listener for new listeners */
+		/* Emit patch-listener only for newly added listeners */
 		const bud_listener *nl;
 		for (nl = new_node->listeners; nl; nl = nl->next) {
-			char bubbles_buf[8];
-			snprintf(bubbles_buf, sizeof(bubbles_buf), "%d", nl->bubbles ? 1 : 0);
-			if (emit(user, "patch-listener", id_buf, nl->event, bubbles_buf) != 0)
-				return -1;
+			const bud_listener *ol;
+			int already = 0;
+			for (ol = old_node->listeners; ol; ol = ol->next) {
+				if (ol->event && nl->event &&
+				    strcmp(ol->event, nl->event) == 0 &&
+				    (ol->bubbles ? 1 : 0) == (nl->bubbles ? 1 : 0)) {
+					already = 1;
+					break;
+				}
+			}
+			if (!already) {
+				char bubbles_buf[8];
+				snprintf(bubbles_buf, sizeof(bubbles_buf), "%d", nl->bubbles ? 1 : 0);
+				if (emit(user, "patch-listener", id_buf, nl->event, bubbles_buf) != 0)
+					return -1;
+			}
 		}
 
 		/* If this element contains raw HTML, emit patch-innerhtml on
