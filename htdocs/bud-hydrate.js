@@ -172,6 +172,17 @@ function buildEventPayload(info, event) {
 		}
 		return event.key || '';
 	}
+	if (event && (info.event === 'mousedown' || info.event === 'mousemove' || info.event === 'mouseup' ||
+	    info.event === 'pointerdown' || info.event === 'pointermove' || info.event === 'pointerup')) {
+		if (info.event === 'mousedown' && !info.bubbles && typeof event.preventDefault === 'function') {
+			event.preventDefault();
+		}
+		const doc = getDocumentForNode(info.node);
+		const view = doc && doc.defaultView;
+		const vw = view && view.innerWidth ? view.innerWidth : 0;
+		const vh = view && view.innerHeight ? view.innerHeight : 0;
+		return `${Math.round(event.clientX || 0)},${Math.round(event.clientY || 0)},${vw},${vh}`;
+	}
 	return buildControlValue(event && event.target);
 }
 
@@ -365,7 +376,7 @@ class BudHostBase {
 				options: spec.event === 'scroll' ? { passive: true } : false,
 				frameId: 0, lastEvent: null };
 			boundHandler = handler;
-			if (spec.event === 'scroll') {
+			if (spec.event === 'scroll' || spec.event === 'mousemove' || spec.event === 'pointermove') {
 				boundHandler = (event) => {
 					record.lastEvent = event;
 					if (record.frameId) return;
