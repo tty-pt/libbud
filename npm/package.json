@@ -5,6 +5,15 @@
   "description": "Universal Node.js and Browser bindings for libbud reactive VDOM diffing and UI tree builder",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./cap": {
+      "default": "./dist/bud-cap.js"
+    }
+  },
   "files": [
     "dist",
     "include",
