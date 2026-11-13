@@ -1202,6 +1202,54 @@ int main(void)
 		bud_free(list2);
 		if (rc != 0)
 			return rc;
+
+		/* ── Test Mixed Keyed + Unkeyed Siblings Diffing ── */
+		bud_node *mix1 = bud_tpl("<div id='stage'>"
+		                         "  <canvas id='cv' width='640'></canvas>"
+		                         "  <div data-bud-key='status' class='visible'>Compiling...</div>"
+		                         "</div>");
+		bud_node *mix2 = bud_tpl("<div id='stage'>"
+		                         "  <canvas id='cv' width='640'></canvas>"
+		                         "  <div data-bud-key='status' class='hidden'>Compiling...</div>"
+		                         "</div>");
+
+		test_ops mix_ops = { { 0 }, 0 };
+		rc = bud_vdom_diff(mix1, mix2, test_emit, &mix_ops);
+		if (rc != 0) {
+			fprintf(stderr, "bud test failed: bud_vdom_diff mixed keyed/unkeyed failed\n");
+			bud_free(mix1);
+			bud_free(mix2);
+			return 1;
+		}
+		rc = check(strstr(mix_ops.buffer, "patch-remove:") == NULL &&
+		           strstr(mix_ops.buffer, "patch-open:canvas") == NULL &&
+		           strstr(mix_ops.buffer, "patch-attr:") != NULL,
+		           "mixed keyed/unkeyed diff preserves unkeyed sibling without patch-remove");
+		bud_free(mix1);
+		bud_free(mix2);
+		if (rc != 0)
+			return rc;
+
+		/* ── Test Foreign & Terminal Elements Protection ── */
+		bud_node *term1 = bud_tpl("<div id='term' data-bud-terminal='1' class='c1'>"
+		                          "  <div class='xterm-injected'><span>text</span></div>"
+		                          "</div>");
+		bud_node *term2 = bud_tpl("<div id='term' data-bud-terminal='1' class='c2'></div>");
+		test_ops term_ops = { { 0 }, 0 };
+		rc = bud_vdom_diff(term1, term2, test_emit, &term_ops);
+		if (rc != 0) {
+			fprintf(stderr, "bud test failed: foreign/terminal diff failed\n");
+			bud_free(term1);
+			bud_free(term2);
+			return 1;
+		}
+		rc = check(strstr(term_ops.buffer, "patch-remove:") == NULL &&
+		           strstr(term_ops.buffer, "patch-attr:") != NULL,
+		           "foreign/terminal element skips child diff and preserves injected DOM");
+		bud_free(term1);
+		bud_free(term2);
+		if (rc != 0)
+			return rc;
 	}
 
 	/* ── Test stable ids across structural diffs ── */

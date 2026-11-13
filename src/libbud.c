@@ -2571,6 +2571,16 @@ static int bud_vdom_diff_node(
 			}
 		}
 
+		/* Elements marked as foreign or terminal manage their own children
+		 * (e.g. xterm.js or WebGL canvas); skip diffing their VDOM children. */
+		if ((bud_attr_find(old_node, "data-bud-foreign") ||
+		     bud_attr_find(old_node, "data-bud-terminal")) &&
+		    (bud_attr_find(new_node, "data-bud-foreign") ||
+		     bud_attr_find(new_node, "data-bud-terminal")))
+		{
+			return 0;
+		}
+
 		/* If this element contains raw HTML, emit patch-innerhtml on
 		 * this element directly */
 		if (old_node->first_child &&
@@ -2643,6 +2653,31 @@ static int bud_vdom_diff_node(
 						                        [i]);
 						if (okey &&
 						    strcmp(okey, nkey) == 0)
+						{
+							found_idx = i;
+							break;
+						}
+					}
+				}
+			} else {
+				for (int i = 0; i < n_old; i++) {
+					if (!matched[i] &&
+					    !bud_get_node_key(old_children[i]))
+					{
+						if (old_children[i]->kind == nc->kind &&
+						    (nc->kind != BUD_NODE_ELEMENT ||
+						     (old_children[i]->tag && nc->tag &&
+						      strcmp(old_children[i]->tag, nc->tag) == 0)))
+						{
+							found_idx = i;
+							break;
+						}
+					}
+				}
+				if (found_idx < 0) {
+					for (int i = 0; i < n_old; i++) {
+						if (!matched[i] &&
+						    !bud_get_node_key(old_children[i]))
 						{
 							found_idx = i;
 							break;
