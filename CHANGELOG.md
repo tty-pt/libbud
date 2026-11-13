@@ -1,5 +1,9 @@
 ## [1.3.0] - 2026-11-13
 
+### Packaging
+- Requires `@tty-pt/stele` >=1.6.2 (`^1.6.2`).
+- The npm tarball is built once by CI, with a self-contained native addon per platform next to `bud.wasm`, and published as verified.
+
 ### Added
 - **Client Hydration Engine (`htdocs/bud-hydrate.js`, `npm/dist/bud-hydrate.js`)**:
   - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment.
