@@ -29,10 +29,10 @@
     "test": "node --test tests/bud.test.mjs"
   },
   "peerDependencies": {
-    "@tty-pt/stele": ">=1.6.0"
+    "@tty-pt/stele": ">=1.6.1"
   },
   "devDependencies": {
-    "@tty-pt/stele": "^1.6.0"
+    "@tty-pt/stele": "^1.6.1"
   },
   "keywords": [
     "bud",
