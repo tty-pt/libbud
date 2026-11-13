@@ -1,4 +1,4 @@
-## [Unreleased] (target: v1.3.0)
+## [1.3.0] - 2026-11-13
 
 ### Added
 - **Client Hydration Engine (`htdocs/bud-hydrate.js`, `npm/dist/bud-hydrate.js`)**:
