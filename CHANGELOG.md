@@ -1,3 +1,23 @@
+## [Unreleased]
+
+### Packaging
+- Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`), and rebuilt `bud.wasm` against the single-allocator `--wrap` shim.
+
+## [1.3.0] - 2026-11-13
+
+### Packaging
+- Requires `@tty-pt/stele` >=1.6.2 (`^1.6.2`).
+- The npm tarball is built once by CI, with a self-contained native addon per platform next to `bud.wasm`, and published as verified.
+
+### Added
+- **Client Hydration Engine (`htdocs/bud-hydrate.js`, `npm/dist/bud-hydrate.js`)**:
+  - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment.
+  - Enhanced `include/bud/bud_state.h` state management and serialization helpers.
+  - Batched capability bridge remounting via microtask scheduling (`queueMicrotask` / `setTimeout`) across patch replay boundaries to prevent bridge thrashing.
+
+### Changed
+- Refactored `src/libbud.c` VDOM diffing and tree traversal operations.
+
 ## [1.2.2] - 2026-11-03
 
 - **Decoupled Pure UI Tree & VDOM Diff Engine**:
