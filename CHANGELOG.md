@@ -10,8 +10,8 @@
 - The npm tarball is built once by CI, with a self-contained native addon per platform next to `bud.wasm`, and published as verified.
 
 ### Added
-- **Client Hydration Engine (`htdocs/bud-hydrate.js`, `npm/dist/bud-hydrate.js`)**:
-  - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment.
+- **Client Hydration Engine & Capability Bridge (`htdocs/bud-hydrate.js`, `htdocs/bud-cap.js`, `npm/dist/bud-hydrate.js`, `npm/dist/bud-cap.js`)**:
+  - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment and Web HAL capability registration (`bud-cap.js`).
   - Enhanced `include/bud/bud_state.h` state management and serialization helpers.
   - Batched capability bridge remounting via microtask scheduling (`queueMicrotask` / `setTimeout`) across patch replay boundaries to prevent bridge thrashing.
 

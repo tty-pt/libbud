@@ -77,6 +77,9 @@ interface VdomPatch {
 ### `getBudWasm(): WebAssembly.Instance`
 Direct accessor returning the underlying compiled WebAssembly instance (`dist/bud.wasm`) loaded with `bud_vdom_diff`, `bud_element`, `bud_text`, and memory allocators.
 
+### Browser Hydration & Capability Modules (`dist/bud-hydrate.js`, `dist/bud-cap.js`)
+Provides client-side SSR DOM attachment, batched patch replay, and Web HAL `bud.*` capability bridge registration on `@tty-pt/stele`.
+
 ### `version(): string`
 Returns the library semantic version string.
 
