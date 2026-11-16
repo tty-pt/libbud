@@ -4201,14 +4201,20 @@ void bud_slot_reset(void)
 	g_slot_contrib_count = 0;
 }
 
-__attribute__((weak)) void bud_patch_attr(bud_node *node, const char *name, const char *value)
+#ifdef _WIN32
+#define BUD_WEAK
+#else
+#define BUD_WEAK __attribute__((weak))
+#endif
+
+BUD_WEAK void bud_patch_attr(bud_node *node, const char *name, const char *value)
 {
 	if (!node || !name || !value)
 		return;
 	bud_set_attr(node, name, value);
 }
 
-__attribute__((weak)) void bud_patch_text(bud_node *node, const char *value)
+BUD_WEAK void bud_patch_text(bud_node *node, const char *value)
 {
 	if (!node || !value)
 		return;
@@ -4222,7 +4228,7 @@ void bud_patch_innerhtml(unsigned int node_id, const char *html)
 	(void)html;
 }
 
-__attribute__((weak)) void bud_app_set_state(void)
+BUD_WEAK void bud_app_set_state(void)
 {
 }
 

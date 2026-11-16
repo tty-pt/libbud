@@ -1,3 +1,8 @@
+## [1.3.2] - 2026-11-16
+
+### Fixed
+- **Windows DLL Exports (`src/libbud.c`)**: Guarded `__attribute__((weak))` under `#ifndef _WIN32` on `bud_patch_attr`, `bud_patch_text`, and `bud_app_set_state` so MinGW-w64 PE/COFF exports them into `libbud.dll.a` for downstream consumers (`libhyle-bud`).
+
 ## [1.3.1] - 2026-11-16
 
 ### Packaging
