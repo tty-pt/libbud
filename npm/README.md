@@ -11,15 +11,19 @@
 [![WebAssembly](https://img.shields.io/badge/WebAssembly-Reactor-654FF0?logo=webassembly)](#)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-success)](#)
 
-> Universal Node.js and Browser bindings for **`libbud`**, the pure-C declarative 5-field UI binder and virtual DOM diffing engine.
+> Universal Node.js and Browser bindings for **`libbud`**, the pure-C declarative 5-field UI binder and virtual DOM diffing engine. Canonical C headers: `<bud/bud.h>`, `<bud/bud_jsx.h>`, and `<bud/bud_app.h>`.
+
+📖 **Full C & UI Engine Documentation**: See the main [**libbud GitHub README**](https://github.com/tty-pt/libbud#readme) for C JSX macro builders, SSR HTML rendering, and VDOM diffing internals.
 
 ---
 
-## 1. Quickstart
+## 1. Quickstart & Installation
 
 ```bash
 npm install @tty-pt/bud
 ```
+
+**Native OS Packages (`tty.pt`)**: Prebuilt native C packages (`libbud`) for Linux (`apt`, `apk`, `pacman`, `dnf`), macOS (`brew`), Windows (`winget`, MSYS2), and OpenBSD (`pkg_add`) are available via the [**tty.pt package repositories**](https://github.com/tty-pt/ci/blob/main/docs/install.md).
 
 ```typescript
 import { h, diffVdom } from "@tty-pt/bud";
@@ -94,7 +98,7 @@ LDLIBS += -lbud
 
 ---
 
-## 3. Building from Source
+## 4. Building from Source
 
 ```bash
 make npm-build    # Compiles native addon and WASM reactor
@@ -103,4 +107,4 @@ make npm-test     # Runs verification test suite
 
 ## License
 
-BSD 2-Clause License. Copyright (c) 2026, tty-pt.
+BSD-2-Clause — Copyright (c) 2026, Paulo Quirino <quirinpa@gmail.com>. See [LICENSE](https://github.com/tty-pt/libbud/blob/main/LICENSE).
