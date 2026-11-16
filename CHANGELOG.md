@@ -1,4 +1,4 @@
-## [Unreleased]
+## [1.3.1] - 2026-11-16
 
 ### Packaging
 - Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`), and rebuilt `bud.wasm` against the single-allocator `--wrap` shim.
