@@ -114,8 +114,8 @@ function buildWasmTree(wasm, node) {
 /**
  * Computes patch operations between two VDOM trees strictly using C bud_vdom_diff via WebAssembly
  */
-export function diffVdom(oldTree, newTree) {
-  if (nativeBinding && nativeBinding.diffVdom) {
+export function diffVdom(oldTree, newTree, options = {}) {
+  if (!options.wasm && nativeBinding && nativeBinding.diffVdom) {
     return nativeBinding.diffVdom(oldTree, newTree);
   }
 

@@ -1,3 +1,28 @@
+## [1.3.2] - 2026-11-16
+
+### Fixed
+- **Windows DLL Exports (`src/libbud.c`)**: Guarded `__attribute__((weak))` under `#ifndef _WIN32` on `bud_patch_attr`, `bud_patch_text`, and `bud_app_set_state` so MinGW-w64 PE/COFF exports them into `libbud.dll.a` for downstream consumers (`libhyle-bud`).
+
+## [1.3.1] - 2026-11-16
+
+### Packaging
+- Upgraded `@tty-pt/stele` `peerDependencies` (`>=1.7.0`) and `devDependencies` (`^1.7.0`), and rebuilt `bud.wasm` against the single-allocator `--wrap` shim.
+
+## [1.3.0] - 2026-11-13
+
+### Packaging
+- Requires `@tty-pt/stele` >=1.6.2 (`^1.6.2`).
+- The npm tarball is built once by CI, with a self-contained native addon per platform next to `bud.wasm`, and published as verified.
+
+### Added
+- **Client Hydration Engine & Capability Bridge (`htdocs/bud-hydrate.js`, `htdocs/bud-cap.js`, `npm/dist/bud-hydrate.js`, `npm/dist/bud-cap.js`)**:
+  - Implemented full client-side HTML hydration runtime with fine-grained DOM attachment and Web HAL capability registration (`bud-cap.js`).
+  - Enhanced `include/bud/bud_state.h` state management and serialization helpers.
+  - Batched capability bridge remounting via microtask scheduling (`queueMicrotask` / `setTimeout`) across patch replay boundaries to prevent bridge thrashing.
+
+### Changed
+- Refactored `src/libbud.c` VDOM diffing and tree traversal operations.
+
 ## [1.2.2] - 2026-11-03
 
 - **Decoupled Pure UI Tree & VDOM Diff Engine**:

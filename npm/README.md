@@ -4,7 +4,7 @@
 
 # @tty-pt/bud
 
-[![npm version](https://img.shields.io/badge/npm-v1.2.2-CB3837?logo=npm)](#)
+[![npm version](https://img.shields.io/badge/npm-v1.3.0-CB3837?logo=npm)](#)
 [![License: BSD-2-Clause](https://img.shields.io/badge/License-BSD--2--Clause-blue)](#)
 [![TypeScript Ready](https://img.shields.io/badge/TypeScript-Ready-3178C6?logo=typescript)](#)
 [![Node.js Native](https://img.shields.io/badge/Node.js-N--API-339933?logo=node.js)](#)
@@ -76,6 +76,9 @@ interface VdomPatch {
 
 ### `getBudWasm(): WebAssembly.Instance`
 Direct accessor returning the underlying compiled WebAssembly instance (`dist/bud.wasm`) loaded with `bud_vdom_diff`, `bud_element`, `bud_text`, and memory allocators.
+
+### Browser Hydration & Capability Modules (`dist/bud-hydrate.js`, `dist/bud-cap.js`)
+Provides client-side SSR DOM attachment, batched patch replay, and Web HAL `bud.*` capability bridge registration on `@tty-pt/stele`.
 
 ### `version(): string`
 Returns the library semantic version string.
