@@ -1,3 +1,9 @@
+## [Unreleased] (target: v1.3.3)
+
+### Fixed
+- **Inactive Input `.value` Property Sync (`htdocs/bud-hydrate.js`, `htdocs/bud-cap.js`, `npm/dist/bud-hydrate.js`, `npm/dist/bud-cap.js`)**:
+  - Updated attribute patch replay (`op: "attr"`, `name === "value"`) to synchronize the live DOM `.value` property on `<input>` elements when `document.activeElement !== el`, ensuring programmatic state updates and resets reflect immediately in the UI without clobbering active user typing focus.
+
 ## [1.3.2] - 2026-11-16
 
 ### Fixed
