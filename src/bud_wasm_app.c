@@ -29,11 +29,6 @@ ISO_IMPORT(void, bud, bud_host_flush, void);
 ISO_IMPORT(void, bud, bud_host_fetch, const char *url, size_t url_len, int request_id);
 ISO_IMPORT(void, bud, bud_host_set_location, const char *url, size_t url_len);
 
-/* Platform host function pointers (declared in bud.h) */
-extern void (*bud_host_fetch_fn)(const char *, size_t, int);
-extern void (*bud_host_log_fn)(const char *, size_t);
-extern void (*bud_host_set_location_fn)(const char *, size_t);
-
 __attribute__((constructor)) static void wasm_platform_init(void)
 {
 	bud_host_fetch_fn = bud_host_fetch;
@@ -248,17 +243,6 @@ void bud_patch_text(bud_node *node, const char *value)
 	        id_str, strlen(id_str), NULL, 0);
 }
 
-ISO_EXPORT(void, bud_patch_innerhtml, unsigned int node_id, const char *html)
-{
-	if (!html)
-		return;
-	char id_str[16];
-	snprintf(id_str, sizeof(id_str), "%u", node_id);
-	bud_host_emit_patch(
-	        "patch-innerhtml", 15, id_str, strlen(id_str), html,
-	        strlen(html), NULL, 0);
-}
-
 int bud_slot_dispatch_event(int slot, unsigned int node_id, const char *event_name, int bubbles, void *event_data)
 {
 	(void)bubbles;
@@ -429,12 +413,6 @@ int wasm_dispatch_event(
 	(void)bubbles;
 	(void)event_data;
 	return -1;
-}
-
-void bud_patch_innerhtml(unsigned int node_id, const char *html)
-{
-	(void)node_id;
-	(void)html;
 }
 
 void bud_host_set_location(const char *url, size_t len)

@@ -42,13 +42,14 @@ void bud_patch_attr(bud_node *node, const char *name, const char *value);
 void bud_patch_text(bud_node *node, const char *value);
 
 /**
- * @brief Queue an innerHTML patch for a node.
- */
-void bud_patch_innerhtml(unsigned int node_id, const char *html);
-
-/**
  * @brief Signal that application state has changed.
  */
 void bud_app_set_state(void);
 
+/* Platform host function pointers (set by WASM adapter, NULL on native) */
+extern void (*bud_host_fetch_fn)(const char *url, size_t len, int id);
+extern void (*bud_host_log_fn)(const char *msg, size_t len);
+extern void (*bud_host_set_location_fn)(const char *url, size_t len);
+
 #endif /* BUD_APP_H */
+

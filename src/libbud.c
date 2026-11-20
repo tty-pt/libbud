@@ -4222,12 +4222,6 @@ BUD_WEAK void bud_patch_text(bud_node *node, const char *value)
 	node->text = strdup(value);
 }
 
-void bud_patch_innerhtml(unsigned int node_id, const char *html)
-{
-	(void)node_id;
-	(void)html;
-}
-
 BUD_WEAK void bud_app_set_state(void)
 {
 }
