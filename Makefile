@@ -2,10 +2,10 @@ FOLDER := bud
 all := libbud bud_test
 
 LDLIBS-libbud :=
-libbud-obj-y :=
+libbud-obj-y := src/bud_tpl.o src/bud_render.o src/bud_runtime.o src/bud_json.o
 LDLIBS-bud_test := -lbud
 
-WASM_SRCS := src/libbud.c npm/wasm/bud_wasm.c
+WASM_SRCS := src/libbud.c src/bud_tpl.c src/bud_render.c src/bud_runtime.c src/bud_json.c npm/wasm/bud_wasm.c
 WASM_EXPORTS := bud_element bud_text bud_set_attr bud_append bud_render_html bud_vdom_diff bud_free
 
 include ../mk/include.mk
