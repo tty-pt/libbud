@@ -1,0 +1,6 @@
+src/
+build/
+*.so
+*.dylib
+*.dll
+node_modules/

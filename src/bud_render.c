@@ -103,6 +103,15 @@ static int bud_render_html_node(const bud_node *node, bud_buf *buf)
 		return bud_buf_append_escaped(buf, node->text, 0);
 	case BUD_NODE_RAW_HTML:
 		return bud_buf_append(buf, node->text);
+	case BUD_NODE_COMPONENT: {
+		bud_node *expanded = bud_ssr_expand_component(node);
+		int rc = 0;
+		if (expanded) {
+			rc = bud_render_html_node(expanded, buf);
+			bud_free(expanded);
+		}
+		return rc;
+	}
 	case BUD_NODE_ELEMENT:
 		break;
 	}
@@ -235,6 +244,15 @@ static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
 		return 0;
 	case BUD_NODE_RAW_HTML:
 		return bud_buf_append(buf, node->text);
+	case BUD_NODE_COMPONENT: {
+		bud_node *expanded = bud_ssr_expand_component(node);
+		int rc = 0;
+		if (expanded) {
+			rc = bud_render_hydrated_html_node(expanded, buf);
+			bud_free(expanded);
+		}
+		return rc;
+	}
 	case BUD_NODE_ELEMENT:
 		break;
 	}
@@ -1043,6 +1061,9 @@ static int bud_sprint_tree_node(
 		break;
 	case BUD_NODE_RAW_HTML:
 		n = snprintf(buf + *pos, bufsz - *pos, "kind=RAW_HTML");
+		break;
+	case BUD_NODE_COMPONENT:
+		n = snprintf(buf + *pos, bufsz - *pos, "kind=COMPONENT");
 		break;
 	default:
 		n = snprintf(buf + *pos, bufsz - *pos, "kind=?");

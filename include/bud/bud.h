@@ -27,7 +27,9 @@ typedef enum bud_node_kind {
 	/** Text node whose contents are HTML-escaped on render. */
 	BUD_NODE_TEXT = 2,
 	/** Raw HTML node emitted verbatim without escaping. */
-	BUD_NODE_RAW_HTML = 3
+	BUD_NODE_RAW_HTML = 3,
+	/** Lazy component node expanded on reconcile or SSR. */
+	BUD_NODE_COMPONENT = 4
 } bud_node_kind;
 
 /**
@@ -345,6 +347,31 @@ int bud_on(bud_node *node, const char *event, int bubbles);
 int bud_bind(
         bud_node *node, const char *event, int bubbles,
         bud_event_handler_fn handler);
+
+/**
+ * @brief Bind an event handler with optional inline-copied context payload.
+ * @param[in] node     Target node.
+ * @param[in] event    Event type.
+ * @param[in] bubbles  Non-zero to bubble.
+ * @param[in] handler  Handler callback.
+ * @param[in] ctx      Context payload pointer (may be NULL).
+ * @param[in] ctx_size Byte size to copy inline (0 to store ctx pointer as-is).
+ * @return 0 on success.
+ */
+int bud_bind_ctx(
+        bud_node *node, const char *event, int bubbles,
+        bud_event_handler_fn handler, const void *ctx, size_t ctx_size);
+
+/**
+ * @brief Create a lazy component virtual node with inline-copied props.
+ * @param[in] fn         Component render function.
+ * @param[in] ctx        Optional component context pointer.
+ * @param[in] props      Pointer to props struct (may be stack-allocated or NULL).
+ * @param[in] props_size Byte size of props struct (0 when props is NULL).
+ * @return New component node, or NULL on allocation failure.
+ */
+bud_node *bud_component_vnode(
+        bud_component_fn fn, void *ctx, const void *props, size_t props_size);
 
 /* Universal API action dispatcher */
 /**

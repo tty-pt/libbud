@@ -26,6 +26,9 @@ static void bud_listener_free(bud_listener *listener)
 	while (listener) {
 		next = listener->next;
 		free(listener->event);
+		if (listener->user_size > 0) {
+			free(listener->user);
+		}
 		free(listener);
 		listener = next;
 	}
@@ -113,6 +116,8 @@ static void bud_node_free_chain(bud_node *node)
 	bud_listener_free(node->listeners);
 	free(node->tag);
 	free(node->text);
+	free(node->key);
+	free(node->comp_props);
 	free(node);
 }
 
@@ -284,9 +289,23 @@ int bud_set_attr(bud_node *node, const char *name, const char *value)
 	char *name_copy;
 	char *value_copy;
 
-	if (!node || node->kind != BUD_NODE_ELEMENT || !name ||
-	    !bud_is_valid_name(name))
+	if (!node || !name || !bud_is_valid_name(name)) {
+		return -1;
+	}
+
+	if (node->kind == BUD_NODE_COMPONENT &&
+	    strcmp(name, "data-bud-key") == 0)
 	{
+		value_copy = bud_strdup(value ? value : "");
+		if (!value_copy) {
+			return -1;
+		}
+		free(node->key);
+		node->key = value_copy;
+		return 0;
+	}
+
+	if (node->kind != BUD_NODE_ELEMENT) {
 		return -1;
 	}
 
@@ -406,7 +425,17 @@ const char *bud_get_attr(const bud_node *node, const char *name)
 {
 	bud_attr *attr;
 
-	if (!node || node->kind != BUD_NODE_ELEMENT || !name) {
+	if (!node || !name) {
+		return NULL;
+	}
+
+	if (node->kind == BUD_NODE_COMPONENT &&
+	    strcmp(name, "data-bud-key") == 0)
+	{
+		return node->key;
+	}
+
+	if (node->kind != BUD_NODE_ELEMENT) {
 		return NULL;
 	}
 
@@ -596,40 +625,63 @@ int bud_on(bud_node *node, const char *event, int bubbles)
 	return bud_bind(node, event, bubbles, NULL);
 }
 
-int bud_bind(
+int bud_bind_ctx(
         bud_node *node, const char *event, int bubbles,
-        bud_event_handler_fn handler)
+        bud_event_handler_fn handler, const void *ctx, size_t ctx_size)
 {
 	bud_listener *listener;
 	bud_listener *tail;
 	char *event_copy;
+	void *user_copy = NULL;
 
 	if (!node || node->kind != BUD_NODE_ELEMENT || !event) {
 		return -1;
 	}
 
-	event_copy = bud_strdup(event);
-	if (!event_copy) {
-		return -1;
+	if (ctx && ctx_size > 0) {
+		user_copy = malloc(ctx_size);
+		if (!user_copy) {
+			return -1;
+		}
+		memcpy(user_copy, ctx, ctx_size);
+	} else {
+		user_copy = (void *)ctx;
 	}
 
 	listener = bud_listener_find(node, event);
 	if (listener) {
+		if (listener->user_size > 0) {
+			free(listener->user);
+		}
 		listener->bubbles = bubbles ? 1 : 0;
 		listener->handler = handler;
-		free(event_copy);
+		listener->user = user_copy;
+		listener->user_size = (ctx && ctx_size > 0) ? ctx_size : 0;
 		return 0;
+	}
+
+	event_copy = bud_strdup(event);
+	if (!event_copy) {
+		if (ctx && ctx_size > 0) {
+			free(user_copy);
+		}
+		return -1;
 	}
 
 	listener = (bud_listener *)calloc(1, sizeof(*listener));
 	if (!listener) {
 		free(event_copy);
+		if (ctx && ctx_size > 0) {
+			free(user_copy);
+		}
 		return -1;
 	}
 
 	listener->event = event_copy;
 	listener->bubbles = bubbles ? 1 : 0;
 	listener->handler = handler;
+	listener->user = user_copy;
+	listener->user_size = (ctx && ctx_size > 0) ? ctx_size : 0;
 	if (!node->listeners) {
 		node->listeners = listener;
 		return 0;
@@ -642,6 +694,54 @@ int bud_bind(
 
 	tail->next = listener;
 	return 0;
+}
+
+int bud_bind(
+        bud_node *node, const char *event, int bubbles,
+        bud_event_handler_fn handler)
+{
+	return bud_bind_ctx(node, event, bubbles, handler, NULL, 0);
+}
+
+bud_node *bud_component_vnode(
+        bud_component_fn fn, void *ctx, const void *props, size_t props_size)
+{
+	bud_node *node;
+
+	if (!fn) {
+		return NULL;
+	}
+
+	node = bud_node_new(BUD_NODE_COMPONENT);
+	if (!node) {
+		return NULL;
+	}
+
+	node->comp_fn = fn;
+	node->comp_ctx = ctx;
+	if (props && props_size > 0) {
+		node->comp_props = malloc(props_size);
+		if (!node->comp_props) {
+			free(node);
+			return NULL;
+		}
+		memcpy(node->comp_props, props, props_size);
+		node->comp_props_size = props_size;
+	}
+	return node;
+}
+
+bud_node *(*bud_ssr_expand_component_hook)(const bud_node *node) = NULL;
+
+bud_node *bud_ssr_expand_component(const bud_node *node)
+{
+	if (!node || node->kind != BUD_NODE_COMPONENT || !node->comp_fn) {
+		return NULL;
+	}
+	if (bud_ssr_expand_component_hook) {
+		return bud_ssr_expand_component_hook(node);
+	}
+	return node->comp_fn(node->comp_ctx, node->comp_props);
 }
 
 int bud_set_lifecycle(

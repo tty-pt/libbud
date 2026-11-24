@@ -25,6 +25,8 @@ struct bud_listener {
 	char *event;
 	int bubbles;
 	bud_event_handler_fn handler;
+	void *user;
+	size_t user_size;
 	bud_listener *next;
 };
 
@@ -33,6 +35,11 @@ struct bud_node {
 	unsigned int id;
 	char *tag;
 	char *text;
+	char *key;
+	bud_component_fn comp_fn;
+	void *comp_ctx;
+	void *comp_props;
+	size_t comp_props_size;
 	bud_attr *attrs;
 	bud_listener *listeners;
 	bud_node *parent;
@@ -280,5 +287,7 @@ static inline bud_listener *bud_listener_find(bud_node *node, const char *event)
 void bud_node_call_mount(bud_node *node, bud_runtime *runtime);
 void bud_node_call_update(bud_node *node, bud_runtime *runtime);
 void bud_node_call_unmount(bud_node *node, bud_runtime *runtime);
+extern bud_node *(*bud_ssr_expand_component_hook)(const bud_node *node);
+bud_node *bud_ssr_expand_component(const bud_node *node);
 
 #endif /* BUD_INTERNAL_H */

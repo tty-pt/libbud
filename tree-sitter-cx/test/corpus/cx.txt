@@ -1,0 +1,310 @@
+================================================================================
+Component with stateful hook, closure, and JSX
+================================================================================
+
+static component LikeButton(const char *label, const char *id) {
+	int *likes = bud_use_state(int, 0);
+	return (
+		<button id={id} class="btn" onClick={[int *likes](bud_event *e) {
+			bud_set(likes, *likes + 1);
+		}}>
+			{label}:{*likes}
+		</button>
+	);
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (component_definition
+    (storage_class_specifier)
+    name: (component_identifier)
+    parameters: (parameter_list
+      (parameter_declaration
+        (type_qualifier)
+        (type_specifier
+          (primitive_type))
+        (declarator
+          (pointer_declarator
+            (declarator
+              (identifier)))))
+      (parameter_declaration
+        (type_qualifier)
+        (type_specifier
+          (primitive_type))
+        (declarator
+          (pointer_declarator
+            (declarator
+              (identifier))))))
+    body: (compound_statement
+      (declaration
+        (type_specifier
+          (primitive_type))
+        (init_declarator
+          declarator: (declarator
+            (pointer_declarator
+              (declarator
+                (identifier))))
+          value: (call_expression
+            function: (identifier)
+            arguments: (argument_list
+              (type_name
+                (type_specifier
+                  (primitive_type)))
+              (number_literal)))))
+      (return_statement
+        (parenthesized_expression
+          (jsx_element
+            (jsx_opening_element
+              name: (jsx_tag_name)
+              (jsx_attribute
+                name: (jsx_attribute_name)
+                value: (jsx_expression
+                  (identifier)))
+              (jsx_attribute
+                name: (jsx_attribute_name)
+                value: (string_literal))
+              (jsx_attribute
+                name: (jsx_attribute_name)
+                value: (jsx_expression
+                  (closure_expression
+                    captures: (capture_list
+                      (capture_item
+                        (type_specifier
+                          (primitive_type))
+                        (declarator
+                          (pointer_declarator
+                            (declarator
+                              (identifier))))))
+                    parameters: (parameter_list
+                      (parameter_declaration
+                        (type_specifier
+                          (identifier))
+                        (declarator
+                          (pointer_declarator
+                            (declarator
+                              (identifier))))))
+                    body: (compound_statement
+                      (expression_statement
+                        (call_expression
+                          function: (identifier)
+                          arguments: (argument_list
+                            (identifier)
+                            (binary_expression
+                              left: (unary_expression
+                                argument: (identifier))
+                              right: (number_literal))))))))))
+            (jsx_expression
+              (identifier))
+            (jsx_text)
+            (jsx_expression
+              (unary_expression
+                argument: (identifier)))
+            (jsx_closing_element
+              name: (jsx_tag_name))))))))
+
+================================================================================
+Fragment, self-closing component, for-comprehension, and if-comprehension
+================================================================================
+
+component List(const char *const *songs, size_t count) {
+	return (
+		<>
+			<TrackBadge prefix="Tracks" count={(int)count} />
+			<ul>
+				{for (size_t i = 0; i < count; i++)
+					<li key={songs[i]}>{songs[i]}</li>
+				}
+				{if (count == 0) <li class="empty">None</li>}
+			</ul>
+		</>
+	);
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (component_definition
+    name: (component_identifier)
+    parameters: (parameter_list
+      (parameter_declaration
+        (type_qualifier)
+        (type_specifier
+          (primitive_type))
+        (declarator
+          (pointer_declarator
+            (type_qualifier)
+            (declarator
+              (pointer_declarator
+                (declarator
+                  (identifier)))))))
+      (parameter_declaration
+        (type_specifier
+          (primitive_type))
+        (declarator
+          (identifier))))
+    body: (compound_statement
+      (return_statement
+        (parenthesized_expression
+          (jsx_fragment
+            (jsx_self_closing_element
+              name: (jsx_component_name)
+              (jsx_attribute
+                name: (jsx_attribute_name)
+                value: (string_literal))
+              (jsx_attribute
+                name: (jsx_attribute_name)
+                value: (jsx_expression
+                  (cast_expression
+                    type: (type_name
+                      (type_specifier
+                        (primitive_type)))
+                    value: (identifier)))))
+            (jsx_element
+              (jsx_opening_element
+                name: (jsx_tag_name))
+              (jsx_for_expression
+                initializer: (declaration
+                  (type_specifier
+                    (primitive_type))
+                  (init_declarator
+                    declarator: (declarator
+                      (identifier))
+                    value: (number_literal)))
+                condition: (binary_expression
+                  left: (identifier)
+                  right: (identifier))
+                update: (update_expression
+                  (identifier))
+                body: (jsx_element
+                  (jsx_opening_element
+                    name: (jsx_tag_name)
+                    (jsx_attribute
+                      name: (jsx_attribute_name)
+                      value: (jsx_expression
+                        (subscript_expression
+                          argument: (identifier)
+                          index: (identifier)))))
+                  (jsx_expression
+                    (subscript_expression
+                      argument: (identifier)
+                      index: (identifier)))
+                  (jsx_closing_element
+                    name: (jsx_tag_name))))
+              (jsx_if_expression
+                condition: (binary_expression
+                  left: (identifier)
+                  right: (number_literal))
+                consequence: (jsx_element
+                  (jsx_opening_element
+                    name: (jsx_tag_name)
+                    (jsx_attribute
+                      name: (jsx_attribute_name)
+                      value: (string_literal)))
+                  (jsx_text)
+                  (jsx_closing_element
+                    name: (jsx_tag_name))))
+              (jsx_closing_element
+                name: (jsx_tag_name)))))))))
+
+================================================================================
+Preprocessor, struct typedef, C less-than comparison, and init capture closure
+================================================================================
+
+#include <bud/bud_reconcile.h>
+
+typedef struct Track {
+	const char *title;
+	int bpm;
+} Track;
+
+component Picker(const Track *t, int *out) {
+	int fast = t->bpm < 120;
+	return <button onClick={[out, int idx = fast]() { *out = idx; }}>{t->title}</button>;
+}
+
+--------------------------------------------------------------------------------
+
+(translation_unit
+  (preproc_include
+    path: (system_lib_string))
+  (typedef_declaration
+    (type_specifier
+      (struct_specifier
+        name: (component_identifier)
+        (field_declaration_list
+          (field_declaration
+            (type_qualifier)
+            (type_specifier
+              (primitive_type))
+            (declarator
+              (pointer_declarator
+                (declarator
+                  (identifier)))))
+          (field_declaration
+            (type_specifier
+              (primitive_type))
+            (declarator
+              (identifier))))))
+    (declarator
+      (component_identifier)))
+  (component_definition
+    name: (component_identifier)
+    parameters: (parameter_list
+      (parameter_declaration
+        (type_qualifier)
+        (type_specifier
+          (component_identifier))
+        (declarator
+          (pointer_declarator
+            (declarator
+              (identifier)))))
+      (parameter_declaration
+        (type_specifier
+          (primitive_type))
+        (declarator
+          (pointer_declarator
+            (declarator
+              (identifier))))))
+    body: (compound_statement
+      (declaration
+        (type_specifier
+          (primitive_type))
+        (init_declarator
+          declarator: (declarator
+            (identifier))
+          value: (binary_expression
+            left: (field_expression
+              argument: (identifier)
+              field: (identifier))
+            right: (number_literal))))
+      (return_statement
+        (jsx_element
+          (jsx_opening_element
+            name: (jsx_tag_name)
+            (jsx_attribute
+              name: (jsx_attribute_name)
+              value: (jsx_expression
+                (closure_expression
+                  captures: (capture_list
+                    (capture_item
+                      name: (identifier))
+                    (capture_item
+                      (type_specifier
+                        (primitive_type))
+                      (declarator
+                        (identifier))
+                      value: (identifier)))
+                  parameters: (parameter_list)
+                  body: (compound_statement
+                    (expression_statement
+                      (assignment_expression
+                        left: (unary_expression
+                          argument: (identifier))
+                        right: (identifier))))))))
+          (jsx_expression
+            (field_expression
+              argument: (identifier)
+              field: (identifier)))
+          (jsx_closing_element
+            name: (jsx_tag_name)))))))

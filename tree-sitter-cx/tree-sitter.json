@@ -1,0 +1,17 @@
+{
+  "grammars": [
+    {
+      "name": "cx",
+      "camelcase": "Cx",
+      "scope": "source.cx",
+      "path": ".",
+      "file-types": ["cx"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for .cx (C11 + JSX + reactive components + portable closures)"
+  }
+}

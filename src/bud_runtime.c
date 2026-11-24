@@ -168,7 +168,14 @@ static int bud_dispatch_event_node(
 			continue;
 		}
 		if (listener->handler) {
-			if (listener->handler(event) != 0) {
+			void *saved_user = event->user;
+			int rc;
+			if (listener->user) {
+				event->user = listener->user;
+			}
+			rc = listener->handler(event);
+			event->user = saved_user;
+			if (rc != 0) {
 				return -1;
 			}
 		}
