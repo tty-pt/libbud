@@ -172,6 +172,12 @@ function buildEventPayload(info, event) {
 		}
 		return event.key || '';
 	}
+	if (event && info.event === 'wheel') {
+		if (!info.bubbles && typeof event.preventDefault === 'function') {
+			event.preventDefault();
+		}
+		return `${Math.round(event.deltaX || 0)},${Math.round(event.deltaY || 0)},${Math.round(event.deltaMode || 0)}`;
+	}
 	if (event && (info.event === 'mousedown' || info.event === 'mousemove' || info.event === 'mouseup' ||
 	    info.event === 'pointerdown' || info.event === 'pointermove' || info.event === 'pointerup')) {
 		if (info.event === 'mousedown' && !info.bubbles && typeof event.preventDefault === 'function') {
@@ -203,7 +209,7 @@ function buildEventPayload(info, event) {
 				}
 			}
 		}
-		return `${Math.round(event.clientX || 0)},${Math.round(event.clientY || 0)},${vw},${vh},${wx},${wy},${ww},${wh}`;
+		return `${Math.round(event.clientX || 0)},${Math.round(event.clientY || 0)},${vw},${vh},${wx},${wy},${ww},${wh},${event.button | 0},${event.buttons | 0}`;
 	}
 	if (event && info.event === 'click' && info.node && typeof info.node.getAttribute === 'function' && info.node.getAttribute('data-item-ref')) {
 		const winEl = typeof info.node.closest === 'function'
@@ -498,10 +504,11 @@ class BudHostBase {
 		}
 
 		if (!isBubbling) {
-			node.addEventListener(spec.event, handler);
+			const evtOpts = (spec.event === 'wheel') ? { passive: false } : false;
+			node.addEventListener(spec.event, handler, evtOpts);
 			this.physicalListeners.push({
 				id, key, target: node, event: spec.event, handler,
-				options: false, frameId: 0
+				options: evtOpts, frameId: 0
 			});
 			return true;
 		}

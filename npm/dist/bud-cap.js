@@ -172,6 +172,12 @@ function buildEventPayload(info, event) {
 		}
 		return event.key || '';
 	}
+	if (event && info.event === 'wheel') {
+		if (!info.bubbles && typeof event.preventDefault === 'function') {
+			event.preventDefault();
+		}
+		return `${Math.round(event.deltaX || 0)},${Math.round(event.deltaY || 0)},${Math.round(event.deltaMode || 0)}`;
+	}
 	if (event && (info.event === 'mousedown' || info.event === 'mousemove' || info.event === 'mouseup' ||
 	    info.event === 'pointerdown' || info.event === 'pointermove' || info.event === 'pointerup')) {
 		if (info.event === 'mousedown' && !info.bubbles && typeof event.preventDefault === 'function') {
@@ -203,7 +209,7 @@ function buildEventPayload(info, event) {
 				}
 			}
 		}
-		return `${Math.round(event.clientX || 0)},${Math.round(event.clientY || 0)},${vw},${vh},${wx},${wy},${ww},${wh}`;
+		return `${Math.round(event.clientX || 0)},${Math.round(event.clientY || 0)},${vw},${vh},${wx},${wy},${ww},${wh},${event.button | 0},${event.buttons | 0}`;
 	}
 	if (event && info.event === 'click' && info.node && typeof info.node.getAttribute === 'function' && info.node.getAttribute('data-item-ref')) {
 		const winEl = typeof info.node.closest === 'function'
@@ -228,7 +234,12 @@ function hydratePersistNodes(root, wasm = null, memory = null, dispatchCb = null
 		if (!key) continue;
 		try {
 			const raw = window.localStorage.getItem(`bud:layout:${key}`);
-			if (!raw) continue;
+			if (!raw) {
+				if (el.getAttribute('style')) {
+					persistNodeState(el);
+				}
+				continue;
+			}
 			const saved = JSON.parse(raw);
 			if (saved && typeof saved === 'object') {
 				if (typeof saved.style === 'string' && saved.style) {
@@ -493,10 +504,11 @@ class BudHostBase {
 		}
 
 		if (!isBubbling) {
-			node.addEventListener(spec.event, handler);
+			const evtOpts = (spec.event === 'wheel') ? { passive: false } : false;
+			node.addEventListener(spec.event, handler, evtOpts);
 			this.physicalListeners.push({
 				id, key, target: node, event: spec.event, handler,
-				options: false, frameId: 0
+				options: evtOpts, frameId: 0
 			});
 			return true;
 		}
@@ -727,6 +739,12 @@ class BudHostBase {
 				} else {
 					if (node.getAttribute(attrName) !== attrVal) {
 						node.setAttribute(attrName, attrVal);
+					}
+					if (attrName === 'value' && 'value' in node) {
+						const doc = getDocumentForNode(node);
+						if ((!doc || doc.activeElement !== node) && node.value !== attrVal) {
+							try { node.value = attrVal; } catch (_) {}
+						}
 					}
 					if (attrName === 'style' || attrName === 'class') {
 						persistNodeState(node);
@@ -1074,7 +1092,8 @@ export class BudWasmBridge {
 	}
 
 	mount() {
-		if (this.root) {
+		if (this.root && !this._persistHydrated) {
+			this._persistHydrated = true;
 			hydratePersistNodes(this.root, this.wasm, this.memory, (nodeId, eventName, bubbles, valStr) => {
 				this.dispatch(nodeId, eventName, bubbles, valStr);
 			});
@@ -1117,6 +1136,13 @@ export class BudWasmBridge {
 
 		return (evt) => {
 			if (!info.bubbles && info.target !== 'window' && evt && evt.target && evt.currentTarget && evt.target !== evt.currentTarget) {
+				return;
+			}
+			if (typeof this.onDispatch !== 'function' && !getWasmExport(this.wasm, ['bud_app_dispatch'])) {
+				if (typeof this.listenerResolver === 'function') {
+					const fn = this.listenerResolver(info);
+					if (typeof fn === 'function') fn(evt);
+				}
 				return;
 			}
 			const value = buildEventPayload(info, evt);
@@ -1265,6 +1291,9 @@ export class BudWasmBridge {
 	}
 
 	_dispatchDomFallback(nodeId, eventName, bubbles = true, eventInit = null) {
+		if (this._inDomFallback) {
+			return false;
+		}
 		const node = this.host.getNode(nodeId);
 		if (!node) {
 			return false;
@@ -1281,7 +1310,12 @@ export class BudWasmBridge {
 			}
 			Object.assign(event, safe);
 		}
-		return node.dispatchEvent(event);
+		this._inDomFallback = true;
+		try {
+			return node.dispatchEvent(event);
+		} finally {
+			this._inDomFallback = false;
+		}
 	}
 
 	dispatchEvent(nodeId, eventName, bubbles = true, eventInit = null) {
