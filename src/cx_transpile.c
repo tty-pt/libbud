@@ -875,7 +875,7 @@ static size_t parse_capture_list(
 
 /* Parse `[captures](bud_event *e) { body }` and emit bud_bind_ctx call into dst. */
 static void parse_and_lift_closure(
-        cx_state *st, cx_buf *dst, const char *el_var, const char *ev_name)
+        cx_state *st, cx_buf *dst, const char *el_var, const char *ev_name, int bubbles)
 {
 	uint32_t cl_line = st->line, cl_col = st->col, cl_off = (uint32_t)st->pos;
 	size_t cap_s = 0, cap_e = 0;
@@ -971,8 +971,8 @@ static void parse_and_lift_closure(
 
 	/* Emit bud_bind_ctx at the call site */
 	if (cap_count > 0) {
-		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", 1, __cx_fn_%u, &(__cx_cap_%u){ ",
-		           el_var, ev_name, cid, cid);
+		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, __cx_fn_%u, &(__cx_cap_%u){ ",
+		           el_var, ev_name, bubbles, cid, cid);
 		for (size_t i = 0; i < cap_count; i++) {
 			if (i > 0)
 				buf_str(dst, ", ");
@@ -980,8 +980,8 @@ static void parse_and_lift_closure(
 		}
 		buf_printf(dst, " }, sizeof(__cx_cap_%u));\n", cid);
 	} else {
-		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", 1, __cx_fn_%u, NULL, 0);\n",
-		           el_var, ev_name, cid);
+		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, __cx_fn_%u, NULL, 0);\n",
+		           el_var, ev_name, bubbles, cid);
 	}
 
 cleanup:
@@ -1459,7 +1459,10 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 			advance(st); /* '=' */
 			skip_ws_and_comments(st);
 
-			int is_event = (an_len >= 3 && aname[0] == 'o' && aname[1] == 'n' &&
+			int is_event_colon = (an_len >= 4 && aname[0] == 'o' && aname[1] == 'n' &&
+			                      aname[2] == ':');
+			int is_event = is_event_colon ||
+			               (an_len >= 3 && aname[0] == 'o' && aname[1] == 'n' &&
 			                isupper((unsigned char)aname[2]));
 
 			if (peek_at(st, 0) == '"') {
@@ -1501,36 +1504,55 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 					const char *ev_src = aname + 2;
 					size_t elen = an_len - 2;
 					const char *ev_target = NULL;
+					int ev_bubbles = 1;
 
-					if (an_len > 8 && memcmp(aname, "onWindow", 8) == 0 &&
-					    isupper((unsigned char)aname[8]))
-					{
-						ev_src = aname + 8;
-						elen = an_len - 8;
-						ev_target = "@window";
-					} else if (an_len > 10 && memcmp(aname, "onDocument", 10) == 0 &&
-					           isupper((unsigned char)aname[10]))
-					{
-						ev_src = aname + 10;
-						elen = an_len - 10;
-						ev_target = "@document";
+					if (is_event_colon) {
+						ev_src = aname + 3;
+						elen = an_len - 3;
+						if (elen > 5 && memcmp(ev_src + elen - 5, ":self", 5) == 0) {
+							elen -= 5;
+							ev_bubbles = 0;
+						}
+						if (elen >= sizeof(ev_lower))
+							elen = sizeof(ev_lower) - 1;
+						memcpy(ev_lower, ev_src, elen);
+						ev_lower[elen] = '\0';
+					} else {
+						if (an_len > 8 && memcmp(aname, "onWindow", 8) == 0 &&
+						    isupper((unsigned char)aname[8]))
+						{
+							ev_src = aname + 8;
+							elen = an_len - 8;
+							ev_target = "@window";
+						} else if (an_len > 10 && memcmp(aname, "onDocument", 10) == 0 &&
+						           isupper((unsigned char)aname[10]))
+						{
+							ev_src = aname + 10;
+							elen = an_len - 10;
+							ev_target = "@document";
+						}
+
+						if (elen > 4 && memcmp(ev_src + elen - 4, "Self", 4) == 0) {
+							elen -= 4;
+							ev_bubbles = 0;
+						}
+
+						size_t tlen = ev_target ? strlen(ev_target) : 0;
+						if (elen + tlen >= sizeof(ev_lower))
+							elen = sizeof(ev_lower) - 1 - tlen;
+						for (size_t k = 0; k < elen; k++)
+							ev_lower[k] = (char)tolower((unsigned char)ev_src[k]);
+						if (ev_target)
+							memcpy(ev_lower + elen, ev_target, tlen);
+						ev_lower[elen + tlen] = '\0';
 					}
-
-					size_t tlen = ev_target ? strlen(ev_target) : 0;
-					if (elen + tlen >= sizeof(ev_lower))
-						elen = sizeof(ev_lower) - 1 - tlen;
-					for (size_t k = 0; k < elen; k++)
-						ev_lower[k] = (char)tolower((unsigned char)ev_src[k]);
-					if (ev_target)
-						memcpy(ev_lower + elen, ev_target, tlen);
-					ev_lower[elen + tlen] = '\0';
 
 					if (peek_at(st, 0) == '[') {
 						am.val_kind = CX_ATTR_CLOSURE;
-						parse_and_lift_closure(st, dst, var, ev_lower);
+						parse_and_lift_closure(st, dst, var, ev_lower, ev_bubbles);
 						skip_ws_and_comments(st);
 					} else {
-						buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", 1, (", var, ev_lower);
+						buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, (", var, ev_lower, ev_bubbles);
 						transpile_c_until(st, dst, spans, '}', 1, CX_SPAN_EXPR);
 						buf_str(dst, "), NULL, 0);\n");
 					}

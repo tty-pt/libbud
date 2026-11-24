@@ -387,6 +387,29 @@ static void test_target_scoped_events(void)
 	printf("  test_target_scoped_events: PASS\n");
 }
 
+static void test_self_and_custom_events(void)
+{
+	const char *src =
+		"static int on_dn(bud_event *e) { (void)e; return 0; }\n"
+		"static int on_cy(bud_event *e) { (void)e; return 0; }\n"
+		"bud_node *bar(int x) {\n"
+		"  return <div onMouseDownSelf={on_dn}\n"
+		"              onWheelSelf={[int x](bud_event *e) { (void)e; (void)x; }}\n"
+		"              on:cycle-viewport={on_cy}\n"
+		"              on:custom-drag:self={on_dn}></div>;\n"
+		"}\n";
+	cx_options opt = { .filename = "self_ev.cx" };
+	cx_result res;
+	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
+	assert(res.diag_count == 0);
+	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"mousedown\", 0, (on_dn), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"wheel\", 0, __cx_fn_1,") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"cycle-viewport\", 1, (on_cy), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"custom-drag\", 0, (on_dn), NULL, 0);") != NULL);
+	cx_result_free(&res);
+	printf("  test_self_and_custom_events: PASS\n");
+}
+
 int main(void)
 {
 	printf("cx_test:\n");
@@ -399,6 +422,7 @@ int main(void)
 	test_diagnostics_and_recovery();
 	test_metadata_index();
 	test_target_scoped_events();
+	test_self_and_custom_events();
 	printf("cx_test: ALL TESTS PASSED\n");
 	return 0;
 }
