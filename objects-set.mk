@@ -13,3 +13,5 @@ CFLAGS-cx_lsp_test-o :=
 CFLAGS-cx_transpile-o :=
 CFLAGS-cx_transpile-o :=
 CFLAGS-cx_transpile-o :=
+CFLAGS-cx_lsp_index-o :=
+CFLAGS-cx_lsp_features-o :=

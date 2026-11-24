@@ -52,12 +52,83 @@ typedef struct cx_diag {
 } cx_diag;
 
 /**
+ * @brief Byte slice `[off, off + len)` into the original `.cx` source buffer.
+ */
+typedef struct cx_slice {
+	uint32_t off;
+	uint32_t len;
+} cx_slice;
+
+typedef enum cx_attr_val_kind {
+	CX_ATTR_BOOL    = 0,
+	CX_ATTR_STRING  = 1,
+	CX_ATTR_EXPR    = 2,
+	CX_ATTR_CLOSURE = 3
+} cx_attr_val_kind;
+
+typedef struct cx_comp_param_meta {
+	cx_slice decl; /**< Full C parameter declaration, e.g. `const char *label` */
+	cx_slice name; /**< Parameter identifier slice, e.g. `label` */
+} cx_comp_param_meta;
+
+typedef struct cx_comp_meta {
+	cx_slice name;        /**< Component identifier */
+	cx_slice decl;        /**< Header slice from `[static] component` through `)` */
+	cx_slice body;        /**< `{ ... }` slice (`len == 0` for forward declarations) */
+	cx_slice doc;         /**< Preceding `///` or doc comment slice (`len == 0` if none) */
+	uint32_t param_start; /**< First index in `cx_result.comp_params` */
+	uint32_t param_count; /**< Number of parameters */
+	uint8_t  is_static;
+	uint8_t  is_forward;
+	uint8_t  _pad[2];
+} cx_comp_meta;
+
+typedef struct cx_attr_meta {
+	cx_slice name;     /**< Attribute or prop name */
+	cx_slice val;      /**< Inner value slice (inside `"..."` or `{...}`, empty for bool) */
+	cx_slice full;     /**< Full attribute slice `name` through closing quote/brace */
+	uint8_t  val_kind; /**< `cx_attr_val_kind` */
+	uint8_t  _pad[3];
+} cx_attr_meta;
+
+typedef struct cx_elem_meta {
+	cx_slice tag;             /**< Opening tag name (`len == 0` for fragments `<>`) */
+	cx_slice close_tag;       /**< Closing tag name (`len == 0` if self-closing/unclosed) */
+	cx_slice full;            /**< Full element slice `<...` through `>` or `</tag>` */
+	uint32_t attr_start;      /**< First index in `cx_result.attrs` */
+	uint32_t attr_count;      /**< Contiguous attribute count */
+	int32_t  parent;          /**< Enclosing element index or -1 */
+	int32_t  comp_idx;        /**< Enclosing component index or -1 */
+	uint8_t  is_component;
+	uint8_t  is_self_closing;
+	uint8_t  in_loop_direct;  /**< 1 if direct JSX child of `{for (...)}` */
+	uint8_t  has_key_attr;    /**< 1 if element specifies a `key` attribute/prop */
+} cx_elem_meta;
+
+typedef struct cx_closure_meta {
+	cx_slice captures; /**< Capture list slice inside `[` ... `]` */
+	cx_slice params;   /**< Parameter list slice inside `(` ... `)` */
+	cx_slice body;     /**< Closure body slice `{` ... `}` */
+	cx_slice full;     /**< Full closure slice `[` ... `}` */
+	int32_t  comp_idx; /**< Enclosing component index or -1 */
+	uint32_t id;       /**< Generated closure numeric ID (`__cx_fn_<id>`) */
+} cx_closure_meta;
+
+typedef struct cx_include_meta {
+	cx_slice path;      /**< Included path inside `"..."` or `<...>` */
+	cx_slice full;      /**< Full `#include ...` directive slice */
+	uint8_t  is_system; /**< 0 for `"..."`, 1 for `<...>` */
+	uint8_t  _pad[3];
+} cx_include_meta;
+
+/**
  * @brief Transpilation options.
  */
 typedef struct cx_options {
-	const char *filename;   /**< Source filename used in `#line` directives */
-	int         emit_lines; /**< Non-zero to emit `#line` directives */
-	int         recover;    /**< Non-zero to tolerate incomplete edits (LSP mode) */
+	const char *filename;    /**< Source filename used in `#line` directives */
+	int         emit_lines;  /**< Non-zero to emit `#line` directives */
+	int         recover;     /**< Non-zero to tolerate incomplete edits (LSP mode) */
+	int         build_index; /**< Non-zero to populate flat structural index arrays in `cx_result` */
 } cx_options;
 
 /**
@@ -71,6 +142,20 @@ typedef struct cx_result {
 	cx_diag *diags;
 	size_t   diag_count;
 	int      ok; /**< 1 if zero errors, 0 if any diagnostic was emitted */
+
+	/* Optional structural index (populated when `opt->build_index != 0`) */
+	cx_comp_meta       *comps;
+	size_t              comp_count;
+	cx_comp_param_meta *comp_params;
+	size_t              comp_param_count;
+	cx_elem_meta       *elems;
+	size_t              elem_count;
+	cx_attr_meta       *attrs;
+	size_t              attr_count;
+	cx_closure_meta    *closures;
+	size_t              closure_count;
+	cx_include_meta    *includes;
+	size_t              include_count;
 } cx_result;
 
 /**
@@ -89,6 +174,13 @@ void cx_result_free(cx_result *res);
  * @return 0 on success, -1 on I/O error.
  */
 int cx_write_map_json(const cx_result *res, const char *path);
+
+/**
+ * @brief Write a C header declaring props structs and render prototypes for all
+ *        non-static components in `res` (requires `opt->build_index = 1`).
+ * @return 0 on success, -1 on I/O error.
+ */
+int cx_write_header(const cx_result *res, const char *src, const char *path);
 
 /**
  * @brief Map a byte offset in `.cx` source to the corresponding offset in emitted `.c`.

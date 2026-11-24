@@ -490,12 +490,651 @@ static void test_real_clangd_e2e(const char *lsp_bin)
 	printf("  test_real_clangd_e2e: PASS\n");
 }
 
+/* ── Test 3: Bucket 1 — Hover, Diagnostic Translation, Symbols, Fold, Linked, Rename */
+
+static void test_bucket1_ux_features(const char *lsp_bin)
+{
+	if (access("/usr/bin/clangd", X_OK) != 0) {
+		printf("  test_bucket1_ux_features: SKIP (clangd not found)\n");
+		return;
+	}
+
+	char cwd[PATH_MAX];
+	assert(getcwd(cwd, sizeof(cwd)) != NULL);
+
+	char tmpdir[] = "/tmp/cx_lsp_b1_XXXXXX";
+	assert(mkdtemp(tmpdir) != NULL);
+
+	char flags_path[PATH_MAX];
+	snprintf(flags_path, sizeof(flags_path), "%s/compile_flags.txt", tmpdir);
+	FILE *ff = fopen(flags_path, "wb");
+	assert(ff != NULL);
+	fprintf(ff, "-std=c11\n-I%s/include\n", cwd);
+	fclose(ff);
+
+	char cx_path[PATH_MAX];
+	snprintf(cx_path, sizeof(cx_path), "%s/b1.cx", tmpdir);
+	char cx_uri[PATH_MAX + 16];
+	snprintf(cx_uri, sizeof(cx_uri), "file://%s", cx_path);
+	char root_uri[PATH_MAX + 16];
+	snprintf(root_uri, sizeof(root_uri), "file://%s", tmpdir);
+
+	char *argv[] = { (char *)lsp_bin, (char *)"--clangd", (char *)"/usr/bin/clangd",
+	                 (char *)"--", (char *)"--log=error", NULL };
+	lsp_client c;
+	lsp_start(&c, lsp_bin, argv);
+
+	char msg[8192];
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+	         "\"processId\":null,\"rootUri\":\"%s\",\"capabilities\":{}}}",
+	         root_uri);
+	lsp_send(&c, msg);
+	char *init_r = lsp_wait_id(&c, 1, 10000);
+	assert(strstr(init_r, "\"foldingRangeProvider\":true") != NULL);
+	assert(strstr(init_r, "\"linkedEditingRangeProvider\":true") != NULL);
+	assert(strstr(init_r, "\"documentSymbolProvider\":true") != NULL);
+	assert(strstr(init_r, "\"codeActionProvider\":true") != NULL);
+	assert(strstr(init_r, "\"prepareProvider\":true") != NULL);
+	assert(strstr(init_r, "\"semanticTokensProvider\"") == NULL);
+	free(init_r);
+
+	lsp_send(&c, "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+	/*
+	 *  0: #include <bud/bud_reconcile.h>
+	 *  1: typedef struct Track { const char *title; } Track;
+	 *  2: /// Interactive like counter button.
+	 *  3: component LikeButton(const char *label, int initial) {
+	 *  4:     int *likes = bud_use_state(int, initial);
+	 *  5:     return (
+	 *  6:         <button onClick={[int *likes](bud_event *e) { bud_set(likes, *likes + 1); }}>
+	 *  7:             {label} {*likes}
+	 *  8:         </button>
+	 *  9:     );
+	 * 10: }
+	 * 11: component App(void) {
+	 * 12:     return (
+	 * 13:         <div class="a" class="b">
+	 * 14:             <LikeButton label="Go" initial={1} bogus={2} />
+	 * 15:             {for (int i = 0; i < 3; i++) <li>{i}</li>}
+	 * 16:         </div>
+	 * 17:     );
+	 * 18: }
+	 */
+	const char *src =
+		"#include <bud/bud_reconcile.h>\n"
+		"typedef struct Track { const char *title; } Track;\n"
+		"/// Interactive like counter button.\n"
+		"component LikeButton(const char *label, int initial) {\n"
+		"\tint *likes = bud_use_state(int, initial);\n"
+		"\treturn (\n"
+		"\t\t<button onClick={[int *likes](bud_event *e) { bud_set(likes, *likes + 1); }}>\n"
+		"\t\t\t{label} {*likes}\n"
+		"\t\t</button>\n"
+		"\t);\n"
+		"}\n"
+		"component App(void) {\n"
+		"\treturn (\n"
+		"\t\t<div class=\"a\" class=\"b\">\n"
+		"\t\t\t<LikeButton label=\"Go\" initial={1} bogus={2} />\n"
+		"\t\t\t{for (int i = 0; i < 3; i++) <li>{i}</li>}\n"
+		"\t\t</div>\n"
+		"\t);\n"
+		"}\n";
+
+	char *esc = json_escape_str(src);
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"cx\",\"version\":1,\"text\":\"%s\"}}}",
+	         cx_uri, esc);
+	free(esc);
+	lsp_send(&c, msg);
+
+	/* 1. Diagnostics: translated unknown prop + cx-missing-key + cx-duplicate-attr */
+	char *dmsg = lsp_wait_method(&c, "textDocument/publishDiagnostics", 10000);
+	assert(strstr(dmsg, "unknown prop 'bogus' on component <LikeButton>") != NULL);
+	assert(strstr(dmsg, "LikeButton_props") == NULL);
+	assert(strstr(dmsg, "cx-missing-key") != NULL);
+	assert(strstr(dmsg, "cx-duplicate-attr") != NULL);
+	free(dmsg);
+
+	/* 2. Native component hover on `<LikeButton` (line 14, col 6) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/hover\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":14,\"character\":6}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *h1 = lsp_wait_id(&c, 20, 10000);
+	assert(strstr(h1, "component LikeButton") != NULL);
+	assert(strstr(h1, "Interactive like counter button.") != NULL);
+	assert(strstr(h1, "_props") == NULL);
+	assert(strstr(h1, "_render") == NULL);
+	free(h1);
+
+	/* 3. Native prop hover on `label=` (line 14, col 16) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/hover\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":14,\"character\":16}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *h2 = lsp_wait_id(&c, 21, 10000);
+	assert(strstr(h2, "const char *label") != NULL);
+	free(h2);
+
+	/* 4. Native HTML event hover on `onClick` (line 6, col 12) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/hover\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":6,\"character\":12}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *h3 = lsp_wait_id(&c, 22, 10000);
+	assert(strstr(h3, "onClick") != NULL);
+	assert(strstr(h3, "bud_event") != NULL);
+	free(h3);
+
+	/* 5. documentSymbol: clean component + C symbols, zero shadow boilerplate */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/documentSymbol\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *syms = lsp_wait_id(&c, 23, 10000);
+	assert(strstr(syms, "\"name\":\"LikeButton\"") != NULL);
+	assert(strstr(syms, "\"name\":\"App\"") != NULL);
+	assert(strstr(syms, "\"name\":\"Track\"") != NULL);
+	assert(strstr(syms, "LikeButton_props") == NULL);
+	assert(strstr(syms, "LikeButton_render") == NULL);
+	assert(strstr(syms, "__cx_") == NULL);
+	free(syms);
+
+	/* 6. foldingRange */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/foldingRange\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *folds = lsp_wait_id(&c, 24, 10000);
+	assert(strstr(folds, "\"startLine\":3") != NULL);
+	assert(strstr(folds, "\"endLine\":10") != NULL);
+	assert(strstr(folds, "\"startLine\":13") != NULL);
+	assert(strstr(folds, "\"endLine\":16") != NULL);
+	free(folds);
+
+	/* 7. linkedEditingRange on `<div` (line 13, col 4) -> lines 13 & 16 */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"textDocument/linkedEditingRange\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":13,\"character\":4}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *lnk = lsp_wait_id(&c, 25, 10000);
+	assert(strstr(lnk, "\"line\":13") != NULL);
+	assert(strstr(lnk, "\"line\":16") != NULL);
+	free(lnk);
+
+	/* 8. prepareRename & rename on `<LikeButton` (line 14, col 6) -> renames line 3 and line 14 */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"textDocument/prepareRename\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":14,\"character\":6}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *pr = lsp_wait_id(&c, 26, 10000);
+	assert(strstr(pr, "\"line\":14") != NULL);
+	free(pr);
+
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"textDocument/rename\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":14,\"character\":6},"
+	         "\"newName\":\"StarButton\"}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ren = lsp_wait_id(&c, 27, 10000);
+	assert(strstr(ren, cx_uri) != NULL);
+	assert(strstr(ren, ".cx.c") == NULL);
+	assert(strstr(ren, "\"newText\":\"StarButton\"") != NULL);
+	assert(strstr(ren, "\"line\":3") != NULL);
+	assert(strstr(ren, "\"line\":14") != NULL);
+	free(ren);
+
+	/* 9. Safe C local variable rename on `likes` (line 4, col 7) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"textDocument/rename\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":4,\"character\":7},"
+	         "\"newName\":\"votes\"}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ren2 = lsp_wait_id(&c, 28, 10000);
+	assert(strstr(ren2, cx_uri) != NULL);
+	assert(strstr(ren2, ".cx.c") == NULL);
+	assert(strstr(ren2, "\"newText\":\"votes\"") != NULL);
+	assert(strstr(ren2, "\"line\":4") != NULL);
+	free(ren2);
+
+	lsp_stop(&c);
+	unlink(flags_path);
+	rmdir(tmpdir);
+	printf("  test_bucket1_ux_features: PASS\n");
+}
+
+/* ── Test 4: Bucket 2 — Multi-file `.cxh`/`.cx`/`.cx.h` & Zero-Config fallbackFlags */
+
+static void test_bucket2_crossfile_and_zero_config(const char *lsp_bin)
+{
+	if (access("/usr/bin/clangd", X_OK) != 0) {
+		printf("  test_bucket2_crossfile_and_zero_config: SKIP (clangd not found)\n");
+		return;
+	}
+
+	char cwd[PATH_MAX];
+	assert(getcwd(cwd, sizeof(cwd)) != NULL);
+
+	char tmpdir[] = "/tmp/cx_lsp_b2_XXXXXX";
+	assert(mkdtemp(tmpdir) != NULL);
+
+	/* NOTE: NO compile_flags.txt here! Symlink `include` so zero-config fallbackFlags finds <bud/...> */
+	char inc_src[PATH_MAX + 16], inc_dst[PATH_MAX + 16];
+	snprintf(inc_src, sizeof(inc_src), "%s/include", cwd);
+	snprintf(inc_dst, sizeof(inc_dst), "%s/include", tmpdir);
+	assert(symlink(inc_src, inc_dst) == 0);
+
+	char cxh_path[PATH_MAX], btn_path[PATH_MAX], app_path[PATH_MAX];
+	char badge_cx[PATH_MAX], badge_h[PATH_MAX];
+	snprintf(cxh_path, sizeof(cxh_path), "%s/button.cxh", tmpdir);
+	snprintf(btn_path, sizeof(btn_path), "%s/button.cx", tmpdir);
+	snprintf(app_path, sizeof(app_path), "%s/app.cx", tmpdir);
+	snprintf(badge_cx, sizeof(badge_cx), "%s/badge.cx", tmpdir);
+	snprintf(badge_h, sizeof(badge_h), "%s/badge.cx.h", tmpdir);
+
+	FILE *f = fopen(cxh_path, "wb");
+	assert(f != NULL);
+	fputs("#pragma once\n"
+	      "/// Primary action button.\n"
+	      "component Button(const char *label, int disabled);\n", f);
+	fclose(f);
+
+	f = fopen(btn_path, "wb");
+	assert(f != NULL);
+	fputs("#include <bud/bud_reconcile.h>\n"
+	      "#include \"button.cxh\"\n"
+	      "/// Primary action button.\n"
+	      "component Button(const char *label, int disabled) {\n"
+	      "\treturn <button disabled={disabled}>{label}</button>;\n"
+	      "}\n", f);
+	fclose(f);
+
+	f = fopen(badge_cx, "wb");
+	assert(f != NULL);
+	fputs("#include <bud/bud_reconcile.h>\n"
+	      "component Badge(const char *text) {\n"
+	      "\treturn <span>{text}</span>;\n"
+	      "}\n", f);
+	fclose(f);
+
+	/* Simulate `cx --emit-header badge.cx.h badge.cx` */
+	f = fopen(badge_h, "wb");
+	assert(f != NULL);
+	fputs("#pragma once\n"
+	      "#include <bud/bud_reconcile.h>\n"
+	      "typedef struct Badge_props { const char *text; } Badge_props;\n"
+	      "bud_node *Badge_render(void *__cx_ctx, const void *__cx_p);\n", f);
+	fclose(f);
+
+	/*
+	 *  0: #include <bud/bud_reconcile.h>
+	 *  1: #include "button.cxh"
+	 *  2: #include "badge.cx.h"
+	 *  3: component App(void) {
+	 *  4:     return (
+	 *  5:         <div>
+	 *  6:             <Button label="Go" disabled={0} />
+	 *  7:             <Badge text="ok" />
+	 *  8:         </div>
+	 *  9:     );
+	 * 10: }
+	 */
+	const char *app_src =
+		"#include <bud/bud_reconcile.h>\n"
+		"#include \"button.cxh\"\n"
+		"#include \"badge.cx.h\"\n"
+		"component App(void) {\n"
+		"\treturn (\n"
+		"\t\t<div>\n"
+		"\t\t\t<Button label=\"Go\" disabled={0} />\n"
+		"\t\t\t<Badge text=\"ok\" />\n"
+		"\t\t</div>\n"
+		"\t);\n"
+		"}\n";
+	f = fopen(app_path, "wb");
+	assert(f != NULL);
+	fputs(app_src, f);
+	fclose(f);
+
+	char app_uri[PATH_MAX + 16], btn_uri[PATH_MAX + 16], badge_uri[PATH_MAX + 16];
+	char root_uri[PATH_MAX + 16];
+	snprintf(app_uri, sizeof(app_uri), "file://%s", app_path);
+	snprintf(btn_uri, sizeof(btn_uri), "file://%s", btn_path);
+	snprintf(badge_uri, sizeof(badge_uri), "file://%s", badge_cx);
+	snprintf(root_uri, sizeof(root_uri), "file://%s", tmpdir);
+
+	char *argv[] = { (char *)lsp_bin, (char *)"--clangd", (char *)"/usr/bin/clangd",
+	                 (char *)"--", (char *)"--log=error", NULL };
+	lsp_client c;
+	lsp_start(&c, lsp_bin, argv);
+
+	char msg[8192];
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+	         "\"processId\":null,\"rootUri\":\"%s\",\"capabilities\":{}}}",
+	         root_uri);
+	lsp_send(&c, msg);
+	char *init_r = lsp_wait_id(&c, 1, 10000);
+	assert(strstr(init_r, "\"capabilities\"") != NULL);
+	free(init_r);
+
+	lsp_send(&c, "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+	char *esc = json_escape_str(app_src);
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"cx\",\"version\":1,\"text\":\"%s\"}}}",
+	         app_uri, esc);
+	free(esc);
+	lsp_send(&c, msg);
+
+	/* 1. Zero-config clangd + spliced `#include "button.cxh"` => 0 diagnostics! */
+	char *d0 = lsp_wait_method(&c, "textDocument/publishDiagnostics", 10000);
+	if (strstr(d0, "\"diagnostics\":[]") == NULL)
+		fprintf(stderr, "bucket2 unexpected diags: %s\n", d0);
+	assert(strstr(d0, app_uri) != NULL);
+	assert(strstr(d0, "\"diagnostics\":[]") != NULL);
+	free(d0);
+
+	/* 2. Cross-file Go-to-Definition on `<Button` (line 6, col 6) -> button.cx (prefers def over .cxh) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/definition\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":6,\"character\":6}}}",
+	         app_uri);
+	lsp_send(&c, msg);
+	char *def_btn = lsp_wait_id(&c, 30, 10000);
+	assert(strstr(def_btn, btn_uri) != NULL);
+	assert(strstr(def_btn, "\"line\":3") != NULL);
+	free(def_btn);
+
+	/* 3. Cross-file Go-to-Definition on `<Badge` (line 7, col 6) -> badge.cx (not badge.cx.h) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/definition\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":7,\"character\":6}}}",
+	         app_uri);
+	lsp_send(&c, msg);
+	char *def_badge = lsp_wait_id(&c, 31, 10000);
+	assert(strstr(def_badge, badge_uri) != NULL);
+	assert(strstr(def_badge, "badge.cx.h") == NULL);
+	free(def_badge);
+
+	/* 4. Cross-file hover on `<Button` shows doc from workspace index */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/hover\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":6,\"character\":6}}}",
+	         app_uri);
+	lsp_send(&c, msg);
+	char *hbtn = lsp_wait_id(&c, 32, 10000);
+	assert(strstr(hbtn, "Primary action button.") != NULL);
+	assert(strstr(hbtn, "const char *label") != NULL);
+	free(hbtn);
+
+	/* 5. Cross-file `<Bu|` and `<Button |` completion */
+	const char *app_edit =
+		"#include <bud/bud_reconcile.h>\n"
+		"#include \"button.cxh\"\n"
+		"component App(void) {\n"
+		"\treturn (\n"
+		"\t\t<div>\n"
+		"\t\t\t<Bu\n"
+		"\t\t\t<Button \n"
+		"\t\t</div>\n"
+		"\t);\n"
+		"}\n";
+	esc = json_escape_str(app_edit);
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+	         "\"contentChanges\":[{\"text\":\"%s\"}]}}",
+	         app_uri, esc);
+	free(esc);
+	lsp_send(&c, msg);
+
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/completion\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":5,\"character\":6}}}",
+	         app_uri);
+	lsp_send(&c, msg);
+	char *c1 = lsp_wait_id(&c, 33, 10000);
+	assert(strstr(c1, "\"label\":\"Button\"") != NULL);
+	free(c1);
+
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/completion\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":6,\"character\":11}}}",
+	         app_uri);
+	lsp_send(&c, msg);
+	char *c2 = lsp_wait_id(&c, 34, 10000);
+	assert(strstr(c2, "\"label\":\"disabled\"") != NULL);
+	assert(strstr(c2, "\"detail\":\"int disabled\"") != NULL);
+	free(c2);
+
+	lsp_stop(&c);
+	unlink(cxh_path);
+	unlink(btn_path);
+	unlink(app_path);
+	unlink(badge_cx);
+	unlink(badge_h);
+	unlink(inc_dst);
+	rmdir(tmpdir);
+	printf("  test_bucket2_crossfile_and_zero_config: PASS\n");
+}
+
+/* ── Test 5: Bucket 3 — Smart Code Actions & Quick-Fix Round-Trip ─────── */
+
+static void test_bucket3_code_actions(const char *lsp_bin)
+{
+	if (access("/usr/bin/clangd", X_OK) != 0) {
+		printf("  test_bucket3_code_actions: SKIP (clangd not found)\n");
+		return;
+	}
+
+	char cwd[PATH_MAX];
+	assert(getcwd(cwd, sizeof(cwd)) != NULL);
+
+	char tmpdir[] = "/tmp/cx_lsp_b3_XXXXXX";
+	assert(mkdtemp(tmpdir) != NULL);
+
+	char flags_path[PATH_MAX];
+	snprintf(flags_path, sizeof(flags_path), "%s/compile_flags.txt", tmpdir);
+	FILE *ff = fopen(flags_path, "wb");
+	assert(ff != NULL);
+	fprintf(ff, "-std=c11\n-I%s/include\n", cwd);
+	fclose(ff);
+
+	char cx_path[PATH_MAX];
+	snprintf(cx_path, sizeof(cx_path), "%s/b3.cx", tmpdir);
+	char cx_uri[PATH_MAX + 16];
+	snprintf(cx_uri, sizeof(cx_uri), "file://%s", cx_path);
+	char root_uri[PATH_MAX + 16];
+	snprintf(root_uri, sizeof(root_uri), "file://%s", tmpdir);
+
+	char *argv[] = { (char *)lsp_bin, (char *)"--clangd", (char *)"/usr/bin/clangd",
+	                 (char *)"--", (char *)"--log=error", NULL };
+	lsp_client c;
+	lsp_start(&c, lsp_bin, argv);
+
+	char msg[8192];
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{"
+	         "\"processId\":null,\"rootUri\":\"%s\",\"capabilities\":{}}}",
+	         root_uri);
+	lsp_send(&c, msg);
+	char *init_r = lsp_wait_id(&c, 1, 10000);
+	free(init_r);
+	lsp_send(&c, "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}");
+
+	/*
+	 *  0: #include <bud/bud_reconcile.h>
+	 *  1: component LikeButton(const char *label, int initial) {
+	 *  2:     int *likes = bud_use_state(int, initial);
+	 *  3:     return <button onClick={[](bud_event *e) { bud_set(likes, *likes + 1); }}>{label}</button>;
+	 *  4: }
+	 *  5: component App(void) {
+	 *  6:     return (
+	 *  7:         <div class="a" class="b">
+	 *  8:             <LikeButton />
+	 *  9:             <NewCard title="hi" />
+	 * 10:             {for (int i = 0; i < 3; i++) <li>{i}</li>}
+	 * 11:         </div>
+	 * 12:     );
+	 * 13: }
+	 */
+	const char *src =
+		"#include <bud/bud_reconcile.h>\n"
+		"component LikeButton(const char *label, int initial) {\n"
+		"\tint *likes = bud_use_state(int, initial);\n"
+		"\treturn <button onClick={[](bud_event *e) { bud_set(likes, *likes + 1); }}>{label}</button>;\n"
+		"}\n"
+		"component App(void) {\n"
+		"\treturn (\n"
+		"\t\t<div class=\"a\" class=\"b\">\n"
+		"\t\t\t<LikeButton />\n"
+		"\t\t\t<NewCard title=\"hi\" />\n"
+		"\t\t\t{for (int i = 0; i < 3; i++) <li>{i}</li>}\n"
+		"\t\t</div>\n"
+		"\t);\n"
+		"}\n";
+	char *esc = json_escape_str(src);
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"cx\",\"version\":1,\"text\":\"%s\"}}}",
+	         cx_uri, esc);
+	free(esc);
+	lsp_send(&c, msg);
+
+	/* Wait for diagnostics reporting undeclared `likes`, `cx-missing-key`, `cx-duplicate-attr` */
+	char *d0 = lsp_wait_method(&c, "textDocument/publishDiagnostics", 10000);
+	assert(strstr(d0, "likes") != NULL);
+	assert(strstr(d0, "cx-missing-key") != NULL);
+	assert(strstr(d0, "cx-duplicate-attr") != NULL);
+	free(d0);
+
+	/* 1. Quick-fix: Capture 'likes' in closure (line 3) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/codeAction\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},"
+	         "\"range\":{\"start\":{\"line\":3,\"character\":50},\"end\":{\"line\":3,\"character\":55}},"
+	         "\"context\":{\"diagnostics\":[{\"range\":{\"start\":{\"line\":3,\"character\":50},\"end\":{\"line\":3,\"character\":55}},"
+	         "\"message\":\"use of undeclared identifier 'likes'\"}]}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ca1 = lsp_wait_id(&c, 40, 10000);
+	assert(strstr(ca1, "Capture 'likes' in closure [int *likes]") != NULL);
+	assert(strstr(ca1, "\"newText\":\"int *likes\"") != NULL);
+	free(ca1);
+
+	/* 2. Quick-fix: Add missing props to <LikeButton /> (line 8) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/codeAction\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},"
+	         "\"range\":{\"start\":{\"line\":8,\"character\":5},\"end\":{\"line\":8,\"character\":10}},"
+	         "\"context\":{\"diagnostics\":[]}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ca2 = lsp_wait_id(&c, 41, 10000);
+	assert(strstr(ca2, "Add 2 missing props to <LikeButton>") != NULL);
+	assert(strstr(ca2, "label=\\\"\\\"") != NULL);
+	assert(strstr(ca2, "initial={0}") != NULL);
+	free(ca2);
+
+	/* 3. Quick-fix: Create component NewCard (line 9) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/codeAction\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},"
+	         "\"range\":{\"start\":{\"line\":9,\"character\":5},\"end\":{\"line\":9,\"character\":12}},"
+	         "\"context\":{\"diagnostics\":[{\"range\":{\"start\":{\"line\":9,\"character\":4},\"end\":{\"line\":9,\"character\":11}},"
+	         "\"message\":\"use of undeclared identifier 'NewCard_render'\"}]}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ca3 = lsp_wait_id(&c, 42, 10000);
+	assert(strstr(ca3, "Create component NewCard") != NULL);
+	assert(strstr(ca3, "component NewCard(const char *title)") != NULL);
+	free(ca3);
+
+	/* 4. Quick-fix: Add key={i} on <li> inside loop (line 10) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"textDocument/codeAction\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},"
+	         "\"range\":{\"start\":{\"line\":10,\"character\":32},\"end\":{\"line\":10,\"character\":36}},"
+	         "\"context\":{\"diagnostics\":[{\"range\":{\"start\":{\"line\":10,\"character\":32},\"end\":{\"line\":10,\"character\":36}},"
+	         "\"code\":\"cx-missing-key\",\"message\":\"missing key\"}]}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ca4 = lsp_wait_id(&c, 43, 10000);
+	assert(strstr(ca4, "Add key={i}") != NULL);
+	assert(strstr(ca4, " key={i}") != NULL);
+	free(ca4);
+
+	/* 5. Quick-fix: Remove duplicate attribute 'class' (line 7) */
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"textDocument/codeAction\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\"},"
+	         "\"range\":{\"start\":{\"line\":7,\"character\":17},\"end\":{\"line\":7,\"character\":22}},"
+	         "\"context\":{\"diagnostics\":[{\"range\":{\"start\":{\"line\":7,\"character\":17},\"end\":{\"line\":7,\"character\":22}},"
+	         "\"code\":\"cx-duplicate-attr\",\"message\":\"duplicate attribute 'class'\"}]}}}",
+	         cx_uri);
+	lsp_send(&c, msg);
+	char *ca5 = lsp_wait_id(&c, 44, 10000);
+	assert(strstr(ca5, "Remove duplicate attribute 'class'") != NULL);
+	free(ca5);
+
+	/* 6. Apply the closure capture fix via didChange on a clean doc and verify 0 clangd diags! */
+	const char *fixed_src =
+		"#include <bud/bud_reconcile.h>\n"
+		"component LikeButton(const char *label, int initial) {\n"
+		"\tint *likes = bud_use_state(int, initial);\n"
+		"\treturn <button onClick={[int *likes](bud_event *e) { bud_set(likes, *likes + 1); }}>{label}</button>;\n"
+		"}\n";
+	esc = json_escape_str(fixed_src);
+	snprintf(msg, sizeof(msg),
+	         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{"
+	         "\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+	         "\"contentChanges\":[{\"text\":\"%s\"}]}}",
+	         cx_uri, esc);
+	free(esc);
+	lsp_send(&c, msg);
+
+	int saw_clean = 0;
+	for (int k = 0; k < 16; k++) {
+		char *dk = lsp_wait_method(&c, "textDocument/publishDiagnostics", 10000);
+		if (strstr(dk, "\"diagnostics\":[]") != NULL) {
+			saw_clean = 1;
+			free(dk);
+			break;
+		}
+		free(dk);
+	}
+	assert(saw_clean);
+
+	lsp_stop(&c);
+	unlink(flags_path);
+	rmdir(tmpdir);
+	printf("  test_bucket3_code_actions: PASS\n");
+}
+
 int main(int argc, char **argv)
 {
 	const char *lsp_bin = (argc > 1) ? argv[1] : "./bin/cx-lsp";
 	printf("cx_lsp_test:\n");
 	test_jsx_completions_and_cx_diags(lsp_bin);
 	test_real_clangd_e2e(lsp_bin);
+	test_bucket1_ux_features(lsp_bin);
+	test_bucket2_crossfile_and_zero_config(lsp_bin);
+	test_bucket3_code_actions(lsp_bin);
 	printf("cx_lsp_test: ALL TESTS PASSED\n");
 	return 0;
 }

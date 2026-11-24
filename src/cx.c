@@ -42,7 +42,7 @@ static char *read_entire_file(const char *path, size_t *out_len)
 static void usage(const char *argv0)
 {
 	fprintf(stderr,
-	        "Usage: %s <input.cx> [-o <output.c>] [--map <output.map.json>] [--no-line] [--recover]\n",
+	        "Usage: %s <input.cx> [-o <output.c>] [--map <output.map.json>] [--emit-header <output.h>] [--no-line] [--recover]\n",
 	        argv0);
 }
 
@@ -51,6 +51,7 @@ int main(int argc, char **argv)
 	const char *in_path = NULL;
 	const char *out_path = NULL;
 	const char *map_path = NULL;
+	const char *hdr_path = NULL;
 	int emit_lines = 1;
 	int recover = 0;
 
@@ -59,6 +60,8 @@ int main(int argc, char **argv)
 			out_path = argv[++i];
 		} else if (strcmp(argv[i], "--map") == 0 && i + 1 < argc) {
 			map_path = argv[++i];
+		} else if (strcmp(argv[i], "--emit-header") == 0 && i + 1 < argc) {
+			hdr_path = argv[++i];
 		} else if (strcmp(argv[i], "--no-line") == 0) {
 			emit_lines = 0;
 		} else if (strcmp(argv[i], "--recover") == 0) {
@@ -92,9 +95,11 @@ int main(int argc, char **argv)
 	}
 
 	cx_options opt;
+	memset(&opt, 0, sizeof(opt));
 	opt.filename = in_path;
 	opt.emit_lines = emit_lines;
 	opt.recover = recover;
+	opt.build_index = (hdr_path != NULL) ? 1 : 0;
 
 	cx_result res;
 	if (cx_transpile(&opt, src, src_len, &res) != 0) {
@@ -121,12 +126,16 @@ int main(int argc, char **argv)
 					fwrite(res.c_code, 1, res.c_len, fp);
 				fclose(fp);
 			}
-		} else {
+		} else if (!hdr_path) {
 			if (res.c_len > 0)
 				fwrite(res.c_code, 1, res.c_len, stdout);
 		}
 		if (map_path && cx_write_map_json(&res, map_path) != 0) {
 			fprintf(stderr, "cx: cannot write span map '%s'\n", map_path);
+			rc = 1;
+		}
+		if (hdr_path && cx_write_header(&res, src, hdr_path) != 0) {
+			fprintf(stderr, "cx: cannot write header '%s'\n", hdr_path);
 			rc = 1;
 		}
 	}

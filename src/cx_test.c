@@ -271,6 +271,104 @@ static void test_diagnostics_and_recovery(void)
 	printf("  test_diagnostics_and_recovery: PASS\n");
 }
 
+static int slice_eq(const char *src, cx_slice sl, const char *lit)
+{
+	size_t n = strlen(lit);
+	return sl.len == n && memcmp(src + sl.off, lit, n) == 0;
+}
+
+static void test_metadata_index(void)
+{
+	const char *src =
+		"#include <bud/bud_reconcile.h>\n"
+		"#include \"button.cxh\"\n"
+		"/** A clickable badge component. */\n"
+		"component Badge(const char *label, int count) {\n"
+		"\treturn <div class=\"badge\">\n"
+		"\t\t<button onClick={[label](bud_event *e) { (void)e; }}>\n"
+		"\t\t\t{for (int i = 0; i < count; i++) <span key={i}>{label}</span>}\n"
+		"\t\t\t{for (int j = 0; j < count; j++) <em>{j}</em>}\n"
+		"\t\t</button>\n"
+		"\t</div>;\n"
+		"}\n"
+		"static component Helper(void);\n";
+
+	cx_options opt = { .filename = "idx.cx", .emit_lines = 0, .recover = 0, .build_index = 1 };
+	cx_result res;
+	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
+	assert(res.ok == 1);
+	assert_spans_in_bounds(src, &res);
+
+	assert(res.include_count == 2);
+	assert(res.includes[0].is_system == 1);
+	assert(slice_eq(src, res.includes[0].path, "bud/bud_reconcile.h"));
+	assert(res.includes[1].is_system == 0);
+	assert(slice_eq(src, res.includes[1].path, "button.cxh"));
+
+	assert(res.comp_count == 2);
+	assert(slice_eq(src, res.comps[0].name, "Badge"));
+	assert(res.comps[0].is_static == 0);
+	assert(res.comps[0].is_forward == 0);
+	assert(res.comps[0].doc.len > 0);
+	assert(strstr(src + res.comps[0].doc.off, "clickable badge") != NULL);
+	assert(res.comps[0].body.len > 0);
+	assert(src[res.comps[0].body.off] == '{');
+	assert(src[res.comps[0].body.off + res.comps[0].body.len - 1] == '}');
+	assert(res.comps[0].param_count == 2);
+	assert(slice_eq(src, res.comp_params[res.comps[0].param_start + 0].name, "label"));
+	assert(slice_eq(src, res.comp_params[res.comps[0].param_start + 0].decl, "const char *label"));
+	assert(slice_eq(src, res.comp_params[res.comps[0].param_start + 1].name, "count"));
+
+	assert(slice_eq(src, res.comps[1].name, "Helper"));
+	assert(res.comps[1].is_static == 1);
+	assert(res.comps[1].is_forward == 1);
+	assert(res.comps[1].body.len == 0);
+
+	assert(res.elem_count == 4);
+	assert(slice_eq(src, res.elems[0].tag, "div"));
+	assert(slice_eq(src, res.elems[0].close_tag, "div"));
+	assert(res.elems[0].parent == -1);
+	assert(res.elems[0].comp_idx == 0);
+	assert(res.elems[0].attr_count == 1);
+	assert(slice_eq(src, res.attrs[res.elems[0].attr_start].name, "class"));
+	assert(slice_eq(src, res.attrs[res.elems[0].attr_start].val, "badge"));
+	assert(res.attrs[res.elems[0].attr_start].val_kind == CX_ATTR_STRING);
+
+	assert(slice_eq(src, res.elems[1].tag, "button"));
+	assert(res.elems[1].parent == 0);
+	assert(res.elems[1].attr_count == 1);
+	assert(res.attrs[res.elems[1].attr_start].val_kind == CX_ATTR_CLOSURE);
+
+	assert(slice_eq(src, res.elems[2].tag, "span"));
+	assert(res.elems[2].in_loop_direct == 1);
+	assert(res.elems[2].has_key_attr == 1);
+
+	assert(slice_eq(src, res.elems[3].tag, "em"));
+	assert(res.elems[3].in_loop_direct == 1);
+	assert(res.elems[3].has_key_attr == 0);
+
+	assert(res.closure_count == 1);
+	assert(slice_eq(src, res.closures[0].captures, "label"));
+	assert(slice_eq(src, res.closures[0].params, "bud_event *e"));
+	assert(res.closures[0].comp_idx == 0);
+
+	const char *hdr = "/tmp/cx_test_emit_hdr.h";
+	assert(cx_write_header(&res, src, hdr) == 0);
+	FILE *fp = fopen(hdr, "rb");
+	assert(fp != NULL);
+	char hbuf[1024];
+	size_t hn = fread(hbuf, 1, sizeof(hbuf) - 1, fp);
+	fclose(fp);
+	hbuf[hn] = '\0';
+	remove(hdr);
+	assert(strstr(hbuf, "typedef struct Badge_props") != NULL);
+	assert(strstr(hbuf, "bud_node *Badge_render(") != NULL);
+	assert(strstr(hbuf, "Helper_props") == NULL);
+
+	cx_result_free(&res);
+	printf("  test_metadata_index: PASS\n");
+}
+
 int main(void)
 {
 	printf("cx_test:\n");
@@ -281,6 +379,7 @@ int main(void)
 	test_loops_and_conditionals();
 	test_span_mapping_roundtrip();
 	test_diagnostics_and_recovery();
+	test_metadata_index();
 	printf("cx_test: ALL TESTS PASSED\n");
 	return 0;
 }

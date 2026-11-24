@@ -17,7 +17,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
-#include <bud/cx.h>
+#include "cx_lsp_internal.h"
 
 #define JSMN_STATIC
 #include "jsmn.h"
@@ -37,13 +37,7 @@
 
 /* ── Dynamic Byte Buffer ──────────────────────────────────────────────── */
 
-typedef struct {
-	char  *data;
-	size_t len;
-	size_t cap;
-} lsp_buf;
-
-static void lbuf_free(lsp_buf *b)
+void lbuf_free(lsp_buf *b)
 {
 	free(b->data);
 	b->data = NULL;
@@ -51,7 +45,7 @@ static void lbuf_free(lsp_buf *b)
 	b->cap = 0;
 }
 
-static int lbuf_reserve(lsp_buf *b, size_t extra)
+int lbuf_reserve(lsp_buf *b, size_t extra)
 {
 	size_t need = b->len + extra + 1;
 	if (need <= b->cap)
@@ -67,7 +61,7 @@ static int lbuf_reserve(lsp_buf *b, size_t extra)
 	return 0;
 }
 
-static int lbuf_append(lsp_buf *b, const char *s, size_t n)
+int lbuf_append(lsp_buf *b, const char *s, size_t n)
 {
 	if (n == 0)
 		return 0;
@@ -79,12 +73,12 @@ static int lbuf_append(lsp_buf *b, const char *s, size_t n)
 	return 0;
 }
 
-static int lbuf_str(lsp_buf *b, const char *s)
+int lbuf_str(lsp_buf *b, const char *s)
 {
 	return lbuf_append(b, s, strlen(s));
 }
 
-static int lbuf_ch(lsp_buf *b, char c)
+int lbuf_ch(lsp_buf *b, char c)
 {
 	if (lbuf_reserve(b, 1) != 0)
 		return -1;
@@ -93,7 +87,28 @@ static int lbuf_ch(lsp_buf *b, char c)
 	return 0;
 }
 
-static char *xstrndup(const char *s, size_t n)
+int lbuf_printf(lsp_buf *b, const char *fmt, ...)
+{
+	va_list ap, ap2;
+	va_start(ap, fmt);
+	va_copy(ap2, ap);
+	int need = vsnprintf(NULL, 0, fmt, ap);
+	va_end(ap);
+	if (need < 0) {
+		va_end(ap2);
+		return -1;
+	}
+	if (lbuf_reserve(b, (size_t)need) != 0) {
+		va_end(ap2);
+		return -1;
+	}
+	vsnprintf(b->data + b->len, (size_t)need + 1, fmt, ap2);
+	va_end(ap2);
+	b->len += (size_t)need;
+	return 0;
+}
+
+char *xstrndup(const char *s, size_t n)
 {
 	char *p = (char *)malloc(n + 1);
 	if (!p)
@@ -106,36 +121,7 @@ static char *xstrndup(const char *s, size_t n)
 
 /* ── Minimal Owned JSON DOM (backed by jsmn.h) ────────────────────────── */
 
-typedef enum {
-	J_NULL = 0,
-	J_BOOL,
-	J_NUM,
-	J_STR,
-	J_ARR,
-	J_OBJ
-} jkind;
-
-typedef struct jval jval;
-
-struct jval {
-	jkind kind;
-	int   bval;
-	char *str;
-	size_t slen;
-	struct {
-		jval  **items;
-		size_t  len;
-		size_t  cap;
-	} arr;
-	struct {
-		char  **keys;
-		jval  **vals;
-		size_t  len;
-		size_t  cap;
-	} obj;
-};
-
-static jval *jval_new(jkind k)
+jval *jval_new(jkind k)
 {
 	jval *v = (jval *)calloc(1, sizeof(*v));
 	if (v)
@@ -143,12 +129,12 @@ static jval *jval_new(jkind k)
 	return v;
 }
 
-static jval *jval_new_null(void)
+jval *jval_new_null(void)
 {
 	return jval_new(J_NULL);
 }
 
-static jval *jval_new_bool(int b)
+jval *jval_new_bool(int b)
 {
 	jval *v = jval_new(J_BOOL);
 	if (v)
@@ -156,7 +142,7 @@ static jval *jval_new_bool(int b)
 	return v;
 }
 
-static jval *jval_new_int(long long n)
+jval *jval_new_int(long long n)
 {
 	char tmp[32];
 	int len = snprintf(tmp, sizeof(tmp), "%lld", n);
@@ -168,7 +154,7 @@ static jval *jval_new_int(long long n)
 	return v;
 }
 
-static jval *jval_new_num_raw(const char *s, size_t n)
+jval *jval_new_num_raw(const char *s, size_t n)
 {
 	jval *v = jval_new(J_NUM);
 	if (v) {
@@ -178,7 +164,7 @@ static jval *jval_new_num_raw(const char *s, size_t n)
 	return v;
 }
 
-static jval *jval_new_strn(const char *s, size_t n)
+jval *jval_new_strn(const char *s, size_t n)
 {
 	jval *v = jval_new(J_STR);
 	if (v) {
@@ -188,12 +174,12 @@ static jval *jval_new_strn(const char *s, size_t n)
 	return v;
 }
 
-static jval *jval_new_str(const char *s)
+jval *jval_new_str(const char *s)
 {
 	return jval_new_strn(s ? s : "", s ? strlen(s) : 0);
 }
 
-static void jval_free(jval *v)
+void jval_free(jval *v)
 {
 	if (!v)
 		return;
@@ -213,7 +199,7 @@ static void jval_free(jval *v)
 	free(v);
 }
 
-static int jval_push(jval *arr, jval *item)
+int jval_push(jval *arr, jval *item)
 {
 	if (!arr || arr->kind != J_ARR || !item)
 		return -1;
@@ -229,7 +215,7 @@ static int jval_push(jval *arr, jval *item)
 	return 0;
 }
 
-static jval *jval_get(const jval *obj, const char *key)
+jval *jval_get(const jval *obj, const char *key)
 {
 	if (!obj || obj->kind != J_OBJ || !key)
 		return NULL;
@@ -240,7 +226,7 @@ static jval *jval_get(const jval *obj, const char *key)
 	return NULL;
 }
 
-static int jval_set(jval *obj, const char *key, jval *val)
+int jval_set(jval *obj, const char *key, jval *val)
 {
 	if (!obj || obj->kind != J_OBJ || !key || !val)
 		return -1;
@@ -272,7 +258,7 @@ static int jval_set(jval *obj, const char *key, jval *val)
 	return 0;
 }
 
-static void jval_del(jval *obj, const char *key)
+void jval_del(jval *obj, const char *key)
 {
 	if (!obj || obj->kind != J_OBJ || !key)
 		return;
@@ -290,21 +276,21 @@ static void jval_del(jval *obj, const char *key)
 	}
 }
 
-static long long jval_as_int(const jval *v, long long def)
+long long jval_as_int(const jval *v, long long def)
 {
 	if (!v || v->kind != J_NUM || !v->str)
 		return def;
 	return strtoll(v->str, NULL, 10);
 }
 
-static const char *jval_as_str(const jval *v)
+const char *jval_as_str(const jval *v)
 {
 	if (!v || v->kind != J_STR)
 		return NULL;
 	return v->str;
 }
 
-static jval *jval_clone(const jval *v)
+jval *jval_clone(const jval *v)
 {
 	if (!v)
 		return NULL;
@@ -478,7 +464,7 @@ static jval *jval_from_tokens(
 	}
 }
 
-static jval *jval_parse(const char *js, size_t len)
+jval *jval_parse(const char *js, size_t len)
 {
 	int cap = 256;
 	jsmntok_t *toks = NULL;
@@ -536,7 +522,7 @@ static void json_escape_append(lsp_buf *b, const char *s, size_t n)
 	lbuf_ch(b, '"');
 }
 
-static void jval_serialize(const jval *v, lsp_buf *b)
+void jval_serialize(const jval *v, lsp_buf *b)
 {
 	if (!v) {
 		lbuf_str(b, "null");
@@ -710,7 +696,7 @@ static int write_all(int fd, const char *data, size_t len)
 	return 0;
 }
 
-static int send_lsp_json(int fd, const jval *msg)
+int send_lsp_json(int fd, const jval *msg)
 {
 	if (fd < 0 || !msg)
 		return -1;
@@ -730,19 +716,14 @@ static int send_lsp_json(int fd, const jval *msg)
 
 /* ── Line/Column <-> Byte Offset Index (UTF-16 LSP columns) ───────────── */
 
-typedef struct {
-	uint32_t *offs;
-	size_t    count;
-} line_index;
-
-static void line_index_free(line_index *li)
+void line_index_free(line_index *li)
 {
 	free(li->offs);
 	li->offs = NULL;
 	li->count = 0;
 }
 
-static void line_index_build(line_index *li, const char *s, size_t len)
+void line_index_build(line_index *li, const char *s, size_t len)
 {
 	line_index_free(li);
 	size_t cap = 64;
@@ -765,7 +746,7 @@ static void line_index_build(line_index *li, const char *s, size_t len)
 	}
 }
 
-static uint32_t line_index_pos_to_off(
+uint32_t line_index_pos_to_off(
         const line_index *li, const char *s, size_t len,
         long long line, long long utf16_col)
 {
@@ -809,7 +790,7 @@ static uint32_t line_index_pos_to_off(
 	return p;
 }
 
-static void line_index_off_to_pos(
+void line_index_off_to_pos(
         const line_index *li, const char *s, size_t len, uint32_t off,
         long long *out_line, long long *out_col)
 {
@@ -856,247 +837,56 @@ static void line_index_off_to_pos(
 	*out_col = col;
 }
 
-/* ── Component Declaration Metadata (for JSX completions) ─────────────── */
-
-typedef struct {
-	char  *name;
-	char **prop_names;
-	char **prop_decls;
-	size_t prop_count;
-} cx_comp_info;
-
-static void comp_info_free(cx_comp_info *c)
+jval *make_lsp_pos(long long line, long long col)
 {
-	free(c->name);
-	for (size_t i = 0; i < c->prop_count; i++) {
-		free(c->prop_names[i]);
-		free(c->prop_decls[i]);
-	}
-	free(c->prop_names);
-	free(c->prop_decls);
-	memset(c, 0, sizeof(*c));
+	jval *p = jval_new(J_OBJ);
+	jval_set(p, "line", jval_new_int(line));
+	jval_set(p, "character", jval_new_int(col));
+	return p;
 }
 
-static int is_id_start(char c)
+jval *make_lsp_range(long long sl, long long sc, long long el, long long ec)
 {
-	return isalpha((unsigned char)c) || c == '_';
+	jval *r = jval_new(J_OBJ);
+	jval_set(r, "start", make_lsp_pos(sl, sc));
+	jval_set(r, "end", make_lsp_pos(el, ec));
+	return r;
 }
 
-static int is_id_char(char c)
+jval *cx_slice_to_range(const line_index *li, const char *src, size_t len, cx_slice sl)
 {
-	return isalnum((unsigned char)c) || c == '_';
+	long long sln = 0, sc = 0, eln = 0, ec = 0;
+	line_index_off_to_pos(li, src, len, sl.off, &sln, &sc);
+	line_index_off_to_pos(li, src, len, sl.off + sl.len, &eln, &ec);
+	return make_lsp_range(sln, sc, eln, ec);
 }
 
-static int is_jsx_attr_char(char c)
-{
-	return isalnum((unsigned char)c) || c == '_' || c == '-' || c == ':';
-}
+/* ── URI, Path & Open Document Table ──────────────────────────────────── */
 
-static char *extract_param_name(const char *s, size_t n)
-{
-	while (n > 0 && isspace((unsigned char)*s)) {
-		s++;
-		n--;
-	}
-	while (n > 0 && isspace((unsigned char)s[n - 1]))
-		n--;
-	if (n == 0)
-		return NULL;
-	/* Handle function pointer `ret (*name)(args)` */
-	for (size_t i = 0; i + 2 < n; i++) {
-		if (s[i] == '(' && s[i + 1] == '*') {
-			size_t p = i + 2;
-			while (p < n && isspace((unsigned char)s[p]))
-				p++;
-			size_t start = p;
-			while (p < n && is_id_char(s[p]))
-				p++;
-			if (p > start)
-				return xstrndup(s + start, p - start);
-		}
-	}
-	size_t end = n;
-	while (end > 0 && (s[end - 1] == ']' || s[end - 1] == '[' || isdigit((unsigned char)s[end - 1])))
-		end--;
-	while (end > 0 && isspace((unsigned char)s[end - 1]))
-		end--;
-	size_t start = end;
-	while (start > 0 && is_id_char(s[start - 1]))
-		start--;
-	if (start < end && is_id_start(s[start]))
-		return xstrndup(s + start, end - start);
-	return NULL;
-}
-
-static void scan_component_decls(
-        const char *src, size_t len, cx_comp_info **out_comps, size_t *out_count)
-{
-	*out_comps = NULL;
-	*out_count = 0;
-	size_t cap = 0;
-
-	size_t i = 0;
-	int depth = 0;
-	while (i < len) {
-		char c = src[i];
-		if (c == '/' && i + 1 < len && src[i + 1] == '/') {
-			while (i < len && src[i] != '\n')
-				i++;
-			continue;
-		}
-		if (c == '/' && i + 1 < len && src[i + 1] == '*') {
-			i += 2;
-			while (i + 1 < len && !(src[i] == '*' && src[i + 1] == '/'))
-				i++;
-			if (i + 1 < len)
-				i += 2;
-			continue;
-		}
-		if (c == '"' || c == '\'') {
-			char q = src[i++];
-			while (i < len) {
-				if (src[i] == '\\' && i + 1 < len) {
-					i += 2;
-					continue;
-				}
-				if (src[i++] == q)
-					break;
-			}
-			continue;
-		}
-		if (c == '{') {
-			depth++;
-			i++;
-			continue;
-		}
-		if (c == '}') {
-			if (depth > 0)
-				depth--;
-			i++;
-			continue;
-		}
-
-		if (depth == 0 && i + 9 <= len && memcmp(src + i, "component", 9) == 0 &&
-		    (i == 0 || !is_id_char(src[i - 1])) &&
-		    (i + 9 == len || !is_id_char(src[i + 9])))
-		{
-			size_t p = i + 9;
-			while (p < len && isspace((unsigned char)src[p]))
-				p++;
-			size_t ns = p;
-			while (p < len && is_id_char(src[p]))
-				p++;
-			size_t ne = p;
-			while (p < len && isspace((unsigned char)src[p]))
-				p++;
-			if (ne > ns && p < len && src[p] == '(') {
-				p++;
-				size_t ps = p;
-				int pd = 1;
-				while (p < len && pd > 0) {
-					if (src[p] == '(') pd++;
-					else if (src[p] == ')') pd--;
-					p++;
-				}
-				size_t pe = (pd == 0) ? (p - 1) : p;
-
-				/* Deduplicate by component name */
-				int dup = 0;
-				for (size_t k = 0; k < *out_count; k++) {
-					if (strlen((*out_comps)[k].name) == ne - ns &&
-					    memcmp((*out_comps)[k].name, src + ns, ne - ns) == 0)
-					{
-						dup = 1;
-						break;
-					}
-				}
-				if (!dup) {
-					if (*out_count >= cap) {
-						cap = cap ? cap * 2 : 8;
-						cx_comp_info *nc = (cx_comp_info *)realloc(
-						        *out_comps, cap * sizeof(*nc));
-						if (!nc)
-							break;
-						*out_comps = nc;
-					}
-					cx_comp_info *ci = &(*out_comps)[(*out_count)++];
-					memset(ci, 0, sizeof(*ci));
-					ci->name = xstrndup(src + ns, ne - ns);
-
-					/* Parse comma-separated parameter declarations */
-					size_t seg_s = ps;
-					int p2 = 0, b2 = 0;
-					size_t pcap = 0;
-					for (size_t q = ps; q <= pe; q++) {
-						char qc = (q < pe) ? src[q] : ',';
-						if (qc == '(') p2++;
-						else if (qc == ')' && p2 > 0) p2--;
-						else if (qc == '[') b2++;
-						else if (qc == ']' && b2 > 0) b2--;
-						if (qc == ',' && p2 == 0 && b2 == 0) {
-							const char *ds = src + seg_s;
-							size_t dl = q - seg_s;
-							while (dl > 0 && isspace((unsigned char)*ds)) {
-								ds++;
-								dl--;
-							}
-							while (dl > 0 && isspace((unsigned char)ds[dl - 1]))
-								dl--;
-							if (dl > 0 && !(dl == 4 && memcmp(ds, "void", 4) == 0)) {
-								char *pname = extract_param_name(ds, dl);
-								if (pname) {
-									if (ci->prop_count >= pcap) {
-										pcap = pcap ? pcap * 2 : 8;
-										char **nn = (char **)realloc(ci->prop_names, pcap * sizeof(char *));
-										char **nd = (char **)realloc(ci->prop_decls, pcap * sizeof(char *));
-										if (nn && nd) {
-											ci->prop_names = nn;
-											ci->prop_decls = nd;
-										}
-									}
-									if (ci->prop_names && ci->prop_decls) {
-										ci->prop_names[ci->prop_count] = pname;
-										ci->prop_decls[ci->prop_count] = xstrndup(ds, dl);
-										ci->prop_count++;
-									} else {
-										free(pname);
-									}
-								}
-							}
-							seg_s = q + 1;
-						}
-					}
-				}
-				i = p;
-				continue;
-			}
-		}
-		i++;
-	}
-}
-
-/* ── Open Document Table & URI Helpers ────────────────────────────────── */
-
-typedef struct {
-	char         *cx_uri;
-	char         *c_uri;
-	char         *cx_path;
-	char         *cx_text;
-	size_t        cx_len;
-	int           version;
-	cx_result     trans;
-	line_index    cx_lines;
-	line_index    c_lines;
-	cx_comp_info *comps;
-	size_t        comp_count;
-} cx_doc;
-
-static int is_cx_uri(const char *uri)
+int is_cx_uri(const char *uri)
 {
 	if (!uri)
 		return 0;
 	size_t n = strlen(uri);
 	return n >= 3 && strcmp(uri + n - 3, ".cx") == 0;
+}
+
+int is_cxh_uri(const char *uri)
+{
+	if (!uri)
+		return 0;
+	size_t n = strlen(uri);
+	return n >= 4 && strcmp(uri + n - 4, ".cxh") == 0;
+}
+
+int is_cx_or_cxh_path(const char *path)
+{
+	return is_cx_uri(path) || is_cxh_uri(path);
+}
+
+static int is_tracked_uri(const char *uri)
+{
+	return is_cx_uri(uri) || is_cxh_uri(uri);
 }
 
 static char *cx_uri_to_c_uri(const char *cx_uri)
@@ -1112,9 +902,11 @@ static char *cx_uri_to_c_uri(const char *cx_uri)
 	return out;
 }
 
-static char *uri_to_path(const char *uri)
+char *uri_to_path(const char *uri)
 {
 	const char *p = uri;
+	if (!p)
+		return xstrndup("", 0);
 	if (strncmp(p, "file://", 7) == 0)
 		p += 7;
 	lsp_buf b = { 0 };
@@ -1134,13 +926,21 @@ static char *uri_to_path(const char *uri)
 	return b.data;
 }
 
-static void doc_free_comps(cx_doc *d)
+char *path_to_uri(const char *path)
 {
-	for (size_t i = 0; i < d->comp_count; i++)
-		comp_info_free(&d->comps[i]);
-	free(d->comps);
-	d->comps = NULL;
-	d->comp_count = 0;
+	if (!path)
+		return xstrndup("file://", 7);
+	lsp_buf b = { 0 };
+	lbuf_str(&b, "file://");
+	for (const char *p = path; *p; p++) {
+		unsigned char c = (unsigned char)*p;
+		if (c <= 0x20 || c == '%' || c == '#' || c == '?' || c >= 0x7F) {
+			lbuf_printf(&b, "%%%02X", (unsigned)c);
+		} else {
+			lbuf_ch(&b, (char)c);
+		}
+	}
+	return b.data ? b.data : xstrndup("file://", 7);
 }
 
 static void doc_free(cx_doc *d)
@@ -1152,23 +952,23 @@ static void doc_free(cx_doc *d)
 	cx_result_free(&d->trans);
 	line_index_free(&d->cx_lines);
 	line_index_free(&d->c_lines);
-	doc_free_comps(d);
 	free(d);
 }
 
-static void doc_retranspile(cx_doc *d)
+static void doc_retranspile(lsp_server *srv, cx_doc *d)
 {
 	cx_result_free(&d->trans);
 	cx_options opt;
+	memset(&opt, 0, sizeof(opt));
 	opt.filename = d->cx_path ? d->cx_path : "<input>.cx";
-	opt.emit_lines = 0; /* exact shadow .c coordinates for clangd */
-	opt.recover = 1;    /* tolerate mid-keystroke incomplete edits */
+	opt.emit_lines = 0;  /* exact shadow .c coordinates for clangd */
+	opt.recover = 1;     /* tolerate mid-keystroke incomplete edits */
+	opt.build_index = 1; /* flat POD metadata for LSP intelligence */
 	cx_transpile(&opt, d->cx_text ? d->cx_text : "", d->cx_len, &d->trans);
 	line_index_build(&d->cx_lines, d->cx_text ? d->cx_text : "", d->cx_len);
 	line_index_build(&d->c_lines, d->trans.c_code ? d->trans.c_code : "", d->trans.c_len);
-	doc_free_comps(d);
-	scan_component_decls(d->cx_text ? d->cx_text : "", d->cx_len,
-	                     &d->comps, &d->comp_count);
+	ws_index_resolve_includes(srv, d);
+	ws_index_update_doc(srv, d);
 }
 
 static void doc_apply_changes(cx_doc *d, const jval *changes)
@@ -1221,9 +1021,76 @@ static void doc_apply_changes(cx_doc *d, const jval *changes)
 	}
 }
 
+cx_doc *find_doc_by_cx_uri(const lsp_server *srv, const char *uri)
+{
+	if (!srv || !uri)
+		return NULL;
+	for (size_t i = 0; i < srv->doc_count; i++) {
+		if (strcmp(srv->docs[i]->cx_uri, uri) == 0)
+			return srv->docs[i];
+	}
+	return NULL;
+}
+
+cx_doc *find_doc_by_c_uri(const lsp_server *srv, const char *uri)
+{
+	if (!srv || !uri)
+		return NULL;
+	for (size_t i = 0; i < srv->doc_count; i++) {
+		if (strcmp(srv->docs[i]->c_uri, uri) == 0)
+			return srv->docs[i];
+	}
+	return NULL;
+}
+
+cx_doc *find_doc_by_path(const lsp_server *srv, const char *path)
+{
+	if (!srv || !path)
+		return NULL;
+	for (size_t i = 0; i < srv->doc_count; i++) {
+		if (srv->docs[i]->cx_path && strcmp(srv->docs[i]->cx_path, path) == 0)
+			return srv->docs[i];
+	}
+	return NULL;
+}
+
+static cx_doc *upsert_doc(lsp_server *srv, const char *cx_uri)
+{
+	cx_doc *d = find_doc_by_cx_uri(srv, cx_uri);
+	if (d)
+		return d;
+	if (srv->doc_count >= srv->doc_cap) {
+		size_t ncap = srv->doc_cap ? srv->doc_cap * 2 : 8;
+		cx_doc **nd = (cx_doc **)realloc(srv->docs, ncap * sizeof(*nd));
+		if (!nd)
+			return NULL;
+		srv->docs = nd;
+		srv->doc_cap = ncap;
+	}
+	d = (cx_doc *)calloc(1, sizeof(*d));
+	if (!d)
+		return NULL;
+	d->cx_uri = xstrndup(cx_uri, strlen(cx_uri));
+	d->c_uri = cx_uri_to_c_uri(cx_uri);
+	d->cx_path = uri_to_path(cx_uri);
+	srv->docs[srv->doc_count++] = d;
+	return d;
+}
+
+static void remove_doc(lsp_server *srv, const char *cx_uri)
+{
+	for (size_t i = 0; i < srv->doc_count; i++) {
+		if (strcmp(srv->docs[i]->cx_uri, cx_uri) == 0) {
+			doc_free(srv->docs[i]);
+			srv->docs[i] = srv->docs[--srv->doc_count];
+			return;
+		}
+	}
+}
+
 /* ── Coordinate Mapping (.cx <-> .c) ──────────────────────────────────── */
 
-static int map_cx_pos_to_c(
+int map_cx_pos_to_c(
         const cx_doc *d, long long cx_line, long long cx_col,
         long long *out_c_line, long long *out_c_col)
 {
@@ -1253,7 +1120,7 @@ static int map_cx_pos_to_c(
 	return 1;
 }
 
-static int map_c_pos_to_cx(
+int map_c_pos_to_cx(
         const cx_doc *d, long long c_line, long long c_col,
         long long *out_cx_line, long long *out_cx_col)
 {
@@ -1298,6 +1165,36 @@ static int map_c_pos_to_cx(
 	return 1;
 }
 
+int cx_c_range_is_mapped(const cx_doc *d, const jval *range)
+{
+	if (!d || !range || range->kind != J_OBJ || !d->trans.c_code)
+		return 0;
+	const jval *st = jval_get(range, "start");
+	const jval *en = jval_get(range, "end");
+	if (!st || !en)
+		return 0;
+	uint32_t s_off = line_index_pos_to_off(
+	        &d->c_lines, d->trans.c_code, d->trans.c_len,
+	        jval_as_int(jval_get(st, "line"), 0),
+	        jval_as_int(jval_get(st, "character"), 0));
+	uint32_t e_off = line_index_pos_to_off(
+	        &d->c_lines, d->trans.c_code, d->trans.c_len,
+	        jval_as_int(jval_get(en, "line"), 0),
+	        jval_as_int(jval_get(en, "character"), 0));
+	if (e_off < s_off)
+		return 0;
+
+	/* Require exact containment in a 1:1 copied user-code span (never synthetic boilerplate) */
+	for (size_t i = 0; i < d->trans.span_count; i++) {
+		const cx_span *s = &d->trans.spans[i];
+		if (s->c_len == 0 || s->c_len != s->cx_len)
+			continue;
+		if (s_off >= s->c_off && e_off <= s->c_off + s->c_len)
+			return 1;
+	}
+	return 0;
+}
+
 static void remap_pos_obj_c_to_cx(const cx_doc *d, jval *pos)
 {
 	if (!d || !pos || pos->kind != J_OBJ)
@@ -1319,358 +1216,31 @@ static void remap_range_obj_c_to_cx(const cx_doc *d, jval *range)
 	remap_pos_obj_c_to_cx(d, jval_get(range, "end"));
 }
 
-/* ── JSX Cursor Context & Direct Completion Engine ────────────────────── */
-
-typedef enum {
-	CTX_C = 0,
-	CTX_JSX_TAG,
-	CTX_JSX_ATTR
-} jsx_cursor_ctx;
-
-typedef struct {
-	jsx_cursor_ctx kind;
-	char           tag[128];
-	char           prefix[128];
-	int            is_component;
-} jsx_ctx_info;
-
-/*
- * Determine whether `cx_off` lies inside a JSX opening tag header (`<tag` or
- * `<tag attr`), outside `{...}` expression holes and `"..."` string literals.
- */
-static void classify_jsx_cursor(const char *src, size_t len, uint32_t cx_off, jsx_ctx_info *out)
+static int remap_range_obj_cx_to_c(const cx_doc *d, jval *range)
 {
-	memset(out, 0, sizeof(*out));
-	out->kind = CTX_C;
-	if (!src || cx_off > len)
-		return;
-
-	/* Scan backwards from cx_off to find an unclosed '<' on the current tag */
-	int brace_depth = 0;
-	int in_str = 0;
-	/* Walk forward from start of current line (or up to 2KB back) so string/brace tracking is exact */
-	size_t win_start = (cx_off > 4096) ? (cx_off - 4096) : 0;
-	while (win_start > 0 && src[win_start - 1] != '\n')
-		win_start--;
-
-	/* Track a small stack of open `<tag` positions and `{` depths */
-	size_t open_lt = (size_t)-1;
-	int    lt_brace_depth = 0;
-
-	size_t i = win_start;
-	while (i < cx_off) {
-		char c = src[i];
-		if (c == '/' && i + 1 < cx_off && src[i + 1] == '/') {
-			while (i < cx_off && src[i] != '\n')
-				i++;
-			continue;
-		}
-		if (c == '/' && i + 1 < cx_off && src[i + 1] == '*') {
-			i += 2;
-			while (i + 1 < cx_off && !(src[i] == '*' && src[i + 1] == '/'))
-				i++;
-			if (i + 1 < cx_off)
-				i += 2;
-			continue;
-		}
-		if (c == '"' || c == '\'') {
-			char q = src[i++];
-			in_str = 1;
-			while (i < cx_off) {
-				if (src[i] == '\\' && i + 1 < cx_off) {
-					i += 2;
-					continue;
-				}
-				if (src[i++] == q) {
-					in_str = 0;
-					break;
-				}
-			}
-			continue;
-		}
-		if (c == '{') {
-			brace_depth++;
-			i++;
-			continue;
-		}
-		if (c == '}') {
-			if (brace_depth > 0)
-				brace_depth--;
-			i++;
-			continue;
-		}
-		if (c == '<') {
-			/* Check if this looks like a JSX opening tag: preceded by expr-start or JSX text */
-			if (i + 1 == cx_off || is_id_start(src[i + 1])) {
-				/* Reject `a < b` comparison: char before '<' (ignoring spaces) cannot be ident/number/`)`/`]` */
-				size_t prev = i;
-				while (prev > win_start && isspace((unsigned char)src[prev - 1]))
-					prev--;
-				int looks_cmp = 0;
-				if (prev > win_start) {
-					char pc = src[prev - 1];
-					if (pc == ')' || pc == ']' || isdigit((unsigned char)pc))
-						looks_cmp = 1;
-					else if (is_id_char(pc)) {
-						/* `return <div` IS JSX, `foo < bar` is comparison */
-						size_t ws = prev;
-						while (ws > win_start && is_id_char(src[ws - 1]))
-							ws--;
-						size_t wl = prev - ws;
-						if (!(wl == 6 && memcmp(src + ws, "return", 6) == 0)) {
-							/* Could still be JSX child text like `Hello <span`, check for '>' earlier on line */
-							looks_cmp = 1;
-							for (size_t k = prev; k > win_start; k--) {
-								if (src[k - 1] == '>') {
-									looks_cmp = 0;
-									break;
-								}
-								if (src[k - 1] == ';' || src[k - 1] == '(')
-									break;
-							}
-						}
-					}
-				}
-				if (!looks_cmp) {
-					open_lt = i;
-					lt_brace_depth = brace_depth;
-				}
-			}
-			i++;
-			continue;
-		}
-		if (c == '>' && open_lt != (size_t)-1 && brace_depth == lt_brace_depth) {
-			/* Avoid `->` arrow closing an open `<` */
-			if (!(i > win_start && src[i - 1] == '-'))
-				open_lt = (size_t)-1;
-		}
-		i++;
+	if (!d || !range || range->kind != J_OBJ)
+		return 0;
+	jval *rs = jval_get(range, "start");
+	jval *re = jval_get(range, "end");
+	long long sl = 0, sc = 0, el = 0, ec = 0;
+	int ok = 0;
+	if (rs && map_cx_pos_to_c(d, jval_as_int(jval_get(rs, "line"), 0),
+	                          jval_as_int(jval_get(rs, "character"), 0), &sl, &sc))
+	{
+		jval_set(rs, "line", jval_new_int(sl));
+		jval_set(rs, "character", jval_new_int(sc));
+		ok = 1;
 	}
-
-	if (in_str || open_lt == (size_t)-1 || brace_depth != lt_brace_depth)
-		return;
-
-	/* We are inside an open `<...` header at the same brace depth (outside `{}` and `"..."`) */
-	size_t p = open_lt + 1;
-	size_t tag_s = p;
-	while (p < cx_off && is_jsx_attr_char(src[p]))
-		p++;
-	size_t tag_e = p;
-
-	if (p == cx_off) {
-		/* Cursor is directly on `<|` or `<tag|` */
-		out->kind = CTX_JSX_TAG;
-		size_t plen = tag_e - tag_s;
-		if (plen >= sizeof(out->prefix))
-			plen = sizeof(out->prefix) - 1;
-		memcpy(out->prefix, src + tag_s, plen);
-		out->prefix[plen] = '\0';
-		return;
+	if (re && map_cx_pos_to_c(d, jval_as_int(jval_get(re, "line"), 0),
+	                          jval_as_int(jval_get(re, "character"), 0), &el, &ec))
+	{
+		jval_set(re, "line", jval_new_int(el));
+		jval_set(re, "character", jval_new_int(ec));
 	}
-
-	/* Must have whitespace after tag name to be in attribute position */
-	if (tag_e == tag_s || !isspace((unsigned char)src[p]))
-		return;
-
-	size_t tlen = tag_e - tag_s;
-	if (tlen >= sizeof(out->tag))
-		tlen = sizeof(out->tag) - 1;
-	memcpy(out->tag, src + tag_s, tlen);
-	out->tag[tlen] = '\0';
-	out->is_component = isupper((unsigned char)out->tag[0]);
-
-	/* Extract attribute-name prefix right before cursor; reject if preceded by '=' */
-	size_t ps = cx_off;
-	while (ps > tag_e && is_jsx_attr_char(src[ps - 1]))
-		ps--;
-	size_t before = ps;
-	while (before > tag_e && isspace((unsigned char)src[before - 1]))
-		before--;
-	if (before > tag_e && src[before - 1] == '=')
-		return; /* cursor is after `attr=`, not attribute name */
-
-	out->kind = CTX_JSX_ATTR;
-	size_t plen = cx_off - ps;
-	if (plen >= sizeof(out->prefix))
-		plen = sizeof(out->prefix) - 1;
-	memcpy(out->prefix, src + ps, plen);
-	out->prefix[plen] = '\0';
+	return ok;
 }
 
-static const char *const k_html_tags[] = {
-	"div", "span", "button", "p", "a", "ul", "ol", "li", "h1", "h2", "h3", "h4",
-	"section", "header", "footer", "nav", "main", "article", "aside",
-	"form", "input", "label", "textarea", "select", "option",
-	"table", "thead", "tbody", "tr", "th", "td",
-	"img", "canvas", "pre", "code", "strong", "em", "small", "hr", "br"
-};
-
-static const char *const k_html_attrs[] = {
-	"class", "id", "style", "key", "href", "src", "alt", "title", "type",
-	"value", "name", "placeholder", "disabled", "checked", "selected",
-	"for", "action", "method", "role", "tabindex", "aria-label",
-	"onClick", "onInput", "onChange", "onSubmit", "onKeyDown", "onKeyUp",
-	"onFocus", "onBlur", "onMouseDown", "onMouseUp", "onMouseEnter", "onMouseLeave"
-};
-
-static int pfx_match(const char *cand, const char *pfx)
-{
-	if (!pfx || !pfx[0])
-		return 1;
-	size_t plen = strlen(pfx);
-	for (size_t i = 0; i < plen; i++) {
-		if (!cand[i] || tolower((unsigned char)cand[i]) != tolower((unsigned char)pfx[i]))
-			return 0;
-	}
-	return 1;
-}
-
-static jval *make_comp_item(const char *label, int kind, const char *detail)
-{
-	jval *it = jval_new(J_OBJ);
-	jval_set(it, "label", jval_new_str(label));
-	jval_set(it, "kind", jval_new_int(kind));
-	if (detail && detail[0])
-		jval_set(it, "detail", jval_new_str(detail));
-	return it;
-}
-
-static jval *build_jsx_completions(const cx_doc *d, const jsx_ctx_info *ctx)
-{
-	jval *items = jval_new(J_ARR);
-	if (ctx->kind == CTX_JSX_TAG) {
-		for (size_t i = 0; i < d->comp_count; i++) {
-			if (pfx_match(d->comps[i].name, ctx->prefix))
-				jval_push(items, make_comp_item(d->comps[i].name, 7 /* Class */, "cx component"));
-		}
-		for (size_t i = 0; i < sizeof(k_html_tags) / sizeof(k_html_tags[0]); i++) {
-			if (pfx_match(k_html_tags[i], ctx->prefix))
-				jval_push(items, make_comp_item(k_html_tags[i], 14 /* Keyword */, "JSX element"));
-		}
-	} else if (ctx->kind == CTX_JSX_ATTR) {
-		if (ctx->is_component) {
-			for (size_t i = 0; i < d->comp_count; i++) {
-				if (strcmp(d->comps[i].name, ctx->tag) == 0) {
-					for (size_t p = 0; p < d->comps[i].prop_count; p++) {
-						if (pfx_match(d->comps[i].prop_names[p], ctx->prefix)) {
-							jval_push(items, make_comp_item(
-							        d->comps[i].prop_names[p],
-							        5 /* Field */,
-							        d->comps[i].prop_decls[p]));
-						}
-					}
-					break;
-				}
-			}
-			if (pfx_match("key", ctx->prefix))
-				jval_push(items, make_comp_item("key", 5, "reconciler key"));
-		} else {
-			for (size_t i = 0; i < sizeof(k_html_attrs) / sizeof(k_html_attrs[0]); i++) {
-				if (pfx_match(k_html_attrs[i], ctx->prefix)) {
-					int is_ev = (strncmp(k_html_attrs[i], "on", 2) == 0 &&
-					             isupper((unsigned char)k_html_attrs[i][2]));
-					jval_push(items, make_comp_item(
-					        k_html_attrs[i],
-					        is_ev ? 23 /* Event */ : 10 /* Property */,
-					        is_ev ? "bud event handler" : "element attribute"));
-				}
-			}
-		}
-	}
-
-	jval *list = jval_new(J_OBJ);
-	jval_set(list, "isIncomplete", jval_new_bool(0));
-	jval_set(list, "items", items);
-	return list;
-}
-
-/* ── Server State & Pending Request Table ─────────────────────────────── */
-
-typedef enum {
-	REQ_OTHER = 0,
-	REQ_INITIALIZE,
-	REQ_DOC_REMAP
-} req_kind;
-
-typedef struct {
-	char    *id_key;
-	req_kind kind;
-	char    *cx_uri;
-} pending_req;
-
-typedef struct {
-	int          client_in;
-	int          client_out;
-	int          clangd_in;   /* pipe write end to clangd stdin */
-	int          clangd_out;  /* pipe read end from clangd stdout */
-	pid_t        clangd_pid;
-	int          no_clangd;
-	int          shutting_down;
-
-	cx_doc     **docs;
-	size_t       doc_count;
-	size_t       doc_cap;
-
-	pending_req *reqs;
-	size_t       req_count;
-	size_t       req_cap;
-} lsp_server;
-
-static cx_doc *find_doc_by_cx_uri(lsp_server *srv, const char *uri)
-{
-	if (!uri)
-		return NULL;
-	for (size_t i = 0; i < srv->doc_count; i++) {
-		if (strcmp(srv->docs[i]->cx_uri, uri) == 0)
-			return srv->docs[i];
-	}
-	return NULL;
-}
-
-static cx_doc *find_doc_by_c_uri(lsp_server *srv, const char *uri)
-{
-	if (!uri)
-		return NULL;
-	for (size_t i = 0; i < srv->doc_count; i++) {
-		if (strcmp(srv->docs[i]->c_uri, uri) == 0)
-			return srv->docs[i];
-	}
-	return NULL;
-}
-
-static cx_doc *upsert_doc(lsp_server *srv, const char *cx_uri)
-{
-	cx_doc *d = find_doc_by_cx_uri(srv, cx_uri);
-	if (d)
-		return d;
-	if (srv->doc_count >= srv->doc_cap) {
-		size_t ncap = srv->doc_cap ? srv->doc_cap * 2 : 8;
-		cx_doc **nd = (cx_doc **)realloc(srv->docs, ncap * sizeof(*nd));
-		if (!nd)
-			return NULL;
-		srv->docs = nd;
-		srv->doc_cap = ncap;
-	}
-	d = (cx_doc *)calloc(1, sizeof(*d));
-	if (!d)
-		return NULL;
-	d->cx_uri = xstrndup(cx_uri, strlen(cx_uri));
-	d->c_uri = cx_uri_to_c_uri(cx_uri);
-	d->cx_path = uri_to_path(cx_uri);
-	srv->docs[srv->doc_count++] = d;
-	return d;
-}
-
-static void remove_doc(lsp_server *srv, const char *cx_uri)
-{
-	for (size_t i = 0; i < srv->doc_count; i++) {
-		if (strcmp(srv->docs[i]->cx_uri, cx_uri) == 0) {
-			doc_free(srv->docs[i]);
-			srv->docs[i] = srv->docs[--srv->doc_count];
-			return;
-		}
-	}
-}
+/* ── Pending Request Table ────────────────────────────────────────────── */
 
 static char *id_to_key(const jval *id)
 {
@@ -1681,16 +1251,21 @@ static char *id_to_key(const jval *id)
 	return b.data;
 }
 
-static void track_req(lsp_server *srv, const jval *id, req_kind kind, const char *cx_uri)
+void track_req_ex(
+        lsp_server *srv, const jval *id, req_kind kind,
+        const char *cx_uri, jval *extra)
 {
 	char *key = id_to_key(id);
-	if (!key)
+	if (!key) {
+		jval_free(extra);
 		return;
+	}
 	if (srv->req_count >= srv->req_cap) {
 		size_t ncap = srv->req_cap ? srv->req_cap * 2 : 16;
 		pending_req *nr = (pending_req *)realloc(srv->reqs, ncap * sizeof(*nr));
 		if (!nr) {
 			free(key);
+			jval_free(extra);
 			return;
 		}
 		srv->reqs = nr;
@@ -1700,9 +1275,12 @@ static void track_req(lsp_server *srv, const jval *id, req_kind kind, const char
 	r->id_key = key;
 	r->kind = kind;
 	r->cx_uri = cx_uri ? xstrndup(cx_uri, strlen(cx_uri)) : NULL;
+	r->extra = extra;
 }
 
-static int pop_req(lsp_server *srv, const jval *id, req_kind *out_kind, char **out_uri)
+static int pop_req(
+        lsp_server *srv, const jval *id,
+        req_kind *out_kind, char **out_uri, jval **out_extra)
 {
 	char *key = id_to_key(id);
 	if (!key)
@@ -1711,6 +1289,7 @@ static int pop_req(lsp_server *srv, const jval *id, req_kind *out_kind, char **o
 		if (strcmp(srv->reqs[i].id_key, key) == 0) {
 			*out_kind = srv->reqs[i].kind;
 			*out_uri = srv->reqs[i].cx_uri;
+			*out_extra = srv->reqs[i].extra;
 			free(srv->reqs[i].id_key);
 			srv->reqs[i] = srv->reqs[--srv->req_count];
 			free(key);
@@ -1723,7 +1302,7 @@ static int pop_req(lsp_server *srv, const jval *id, req_kind *out_kind, char **o
 
 /* ── Recursive `.c -> .cx` JSON Rewriter ──────────────────────────────── */
 
-static void remap_json_c_to_cx(lsp_server *srv, jval *v, const cx_doc *active_doc)
+void remap_json_c_to_cx(const lsp_server *srv, jval *v, const cx_doc *active_doc)
 {
 	if (!v)
 		return;
@@ -1795,41 +1374,10 @@ static void remap_json_c_to_cx(lsp_server *srv, jval *v, const cx_doc *active_do
 	}
 }
 
-static void append_cx_diags(const cx_doc *d, jval *diags_arr)
-{
-	if (!d || !diags_arr || diags_arr->kind != J_ARR)
-		return;
-	for (size_t i = 0; i < d->trans.diag_count; i++) {
-		const cx_diag *cd = &d->trans.diags[i];
-		long long line = (cd->line > 0) ? (long long)(cd->line - 1) : 0;
-		long long col = (cd->col > 0) ? (long long)(cd->col - 1) : 0;
-
-		jval *start = jval_new(J_OBJ);
-		jval_set(start, "line", jval_new_int(line));
-		jval_set(start, "character", jval_new_int(col));
-
-		jval *end = jval_new(J_OBJ);
-		jval_set(end, "line", jval_new_int(line));
-		jval_set(end, "character", jval_new_int(col + 1));
-
-		jval *range = jval_new(J_OBJ);
-		jval_set(range, "start", start);
-		jval_set(range, "end", end);
-
-		jval *diag = jval_new(J_OBJ);
-		jval_set(diag, "range", range);
-		jval_set(diag, "severity", jval_new_int(1)); /* Error */
-		jval_set(diag, "source", jval_new_str("cx"));
-		jval_set(diag, "message", jval_new_str(cd->msg));
-
-		jval_push(diags_arr, diag);
-	}
-}
-
 static void publish_cx_only_diags(lsp_server *srv, const cx_doc *d)
 {
 	jval *diags = jval_new(J_ARR);
-	append_cx_diags(d, diags);
+	cx_feat_process_diags(srv, d, diags);
 	jval *params = jval_new(J_OBJ);
 	jval_set(params, "uri", jval_new_str(d->cx_uri));
 	jval_set(params, "diagnostics", diags);
@@ -1841,7 +1389,7 @@ static void publish_cx_only_diags(lsp_server *srv, const cx_doc *d)
 	jval_free(note);
 }
 
-static void send_result_to_client(lsp_server *srv, const jval *id, jval *result)
+void send_result_to_client(lsp_server *srv, const jval *id, jval *result)
 {
 	jval *resp = jval_new(J_OBJ);
 	jval_set(resp, "jsonrpc", jval_new_str("2.0"));
@@ -1849,6 +1397,70 @@ static void send_result_to_client(lsp_server *srv, const jval *id, jval *result)
 	jval_set(resp, "result", result ? result : jval_new_null());
 	send_lsp_json(srv->client_out, resp);
 	jval_free(resp);
+}
+
+static void apply_cx_capabilities(jval *caps)
+{
+	if (!caps || caps->kind != J_OBJ)
+		return;
+
+	jval *comp = jval_get(caps, "completionProvider");
+	if (!comp || comp->kind != J_OBJ) {
+		comp = jval_new(J_OBJ);
+		jval_set(caps, "completionProvider", comp);
+	}
+	jval *trigs = jval_get(comp, "triggerCharacters");
+	if (!trigs || trigs->kind != J_ARR) {
+		trigs = jval_new(J_ARR);
+		jval_set(comp, "triggerCharacters", trigs);
+	}
+	int has_lt = 0;
+	for (size_t i = 0; i < trigs->arr.len; i++) {
+		const char *s = jval_as_str(trigs->arr.items[i]);
+		if (s && strcmp(s, "<") == 0)
+			has_lt = 1;
+	}
+	if (!has_lt)
+		jval_push(trigs, jval_new_str("<"));
+
+	/* Strip capabilities whose wire formats or edits operate in shadow-C
+	 * coordinates without range remapping (e.g., delta-encoded semanticTokens
+	 * and clang-format). Tree-sitter handles .cx syntax highlighting cleanly. */
+	jval_del(caps, "semanticTokensProvider");
+	jval_del(caps, "documentFormattingProvider");
+	jval_del(caps, "documentRangeFormattingProvider");
+	jval_del(caps, "documentOnTypeFormattingProvider");
+	jval_del(caps, "inlayHintProvider");
+
+	/* Advertise first-class .cx providers */
+	jval_set(caps, "hoverProvider", jval_new_bool(1));
+	jval_set(caps, "definitionProvider", jval_new_bool(1));
+	jval_set(caps, "documentSymbolProvider", jval_new_bool(1));
+	jval_set(caps, "foldingRangeProvider", jval_new_bool(1));
+	jval_set(caps, "linkedEditingRangeProvider", jval_new_bool(1));
+	jval_set(caps, "codeActionProvider", jval_new_bool(1));
+	jval *ren = jval_new(J_OBJ);
+	jval_set(ren, "prepareProvider", jval_new_bool(1));
+	jval_set(caps, "renameProvider", ren);
+}
+
+static char *extract_root_path(const jval *params)
+{
+	if (!params || params->kind != J_OBJ)
+		return NULL;
+	const char *ruri = jval_as_str(jval_get(params, "rootUri"));
+	if (ruri && ruri[0])
+		return uri_to_path(ruri);
+	const char *rpath = jval_as_str(jval_get(params, "rootPath"));
+	if (rpath && rpath[0])
+		return xstrndup(rpath, strlen(rpath));
+	const jval *wfs = jval_get(params, "workspaceFolders");
+	if (wfs && wfs->kind == J_ARR && wfs->arr.len > 0) {
+		const char *wfuri = jval_as_str(jval_get(wfs->arr.items[0], "uri"));
+		if (wfuri && wfuri[0])
+			return uri_to_path(wfuri);
+	}
+	return NULL;
 }
 
 /* ── Message Handlers ─────────────────────────────────────────────────── */
@@ -1867,6 +1479,11 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 	}
 
 	if (strcmp(method, "initialize") == 0) {
+		free(srv->root_path);
+		srv->root_path = extract_root_path(params);
+		if (srv->root_path)
+			ws_index_scan_root(srv, srv->root_path);
+
 		if (srv->no_clangd) {
 			jval *caps = jval_new(J_OBJ);
 			jval_set(caps, "textDocumentSync", jval_new_int(2));
@@ -1877,13 +1494,16 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 			jval *comp = jval_new(J_OBJ);
 			jval_set(comp, "triggerCharacters", trigs);
 			jval_set(caps, "completionProvider", comp);
+			apply_cx_capabilities(caps);
 			jval *res = jval_new(J_OBJ);
 			jval_set(res, "capabilities", caps);
 			send_result_to_client(srv, id, res);
 			return;
 		}
+		if (params && params->kind == J_OBJ)
+			inject_fallback_flags(params, srv->root_path);
 		if (id)
-			track_req(srv, id, REQ_INITIALIZE, NULL);
+			track_req_ex(srv, id, REQ_INITIALIZE, NULL, NULL);
 		send_lsp_json(srv->clangd_in, msg);
 		return;
 	}
@@ -1905,10 +1525,29 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 		return;
 	}
 
+	if (strcmp(method, "workspace/didChangeWatchedFiles") == 0 && params) {
+		const jval *changes = jval_get(params, "changes");
+		if (changes && changes->kind == J_ARR) {
+			for (size_t i = 0; i < changes->arr.len; i++) {
+				const char *uri = jval_as_str(jval_get(changes->arr.items[i], "uri"));
+				if (is_tracked_uri(uri)) {
+					char *path = uri_to_path(uri);
+					if (path) {
+						ws_index_index_path(srv, path);
+						free(path);
+					}
+				}
+			}
+		}
+		if (!srv->no_clangd)
+			send_lsp_json(srv->clangd_in, msg);
+		return;
+	}
+
 	if (strcmp(method, "textDocument/didOpen") == 0 && params) {
 		jval *td = jval_get(params, "textDocument");
 		const char *uri = td ? jval_as_str(jval_get(td, "uri")) : NULL;
-		if (is_cx_uri(uri)) {
+		if (is_tracked_uri(uri)) {
 			cx_doc *d = upsert_doc(srv, uri);
 			if (d) {
 				jval *tv = jval_get(td, "text");
@@ -1916,7 +1555,7 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 				d->cx_text = xstrndup(tv && tv->str ? tv->str : "", tv ? tv->slen : 0);
 				d->cx_len = tv ? tv->slen : 0;
 				d->version = (int)jval_as_int(jval_get(td, "version"), 1);
-				doc_retranspile(d);
+				doc_retranspile(srv, d);
 
 				jval_set(td, "uri", jval_new_str(d->c_uri));
 				jval_set(td, "languageId", jval_new_str("c"));
@@ -1941,7 +1580,7 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 		if (d) {
 			d->version = (int)jval_as_int(jval_get(td, "version"), d->version + 1);
 			doc_apply_changes(d, jval_get(params, "contentChanges"));
-			doc_retranspile(d);
+			doc_retranspile(srv, d);
 
 			jval_set(td, "uri", jval_new_str(d->c_uri));
 			jval *full_ch = jval_new(J_OBJ);
@@ -1966,6 +1605,7 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 		const char *uri = td ? jval_as_str(jval_get(td, "uri")) : NULL;
 		cx_doc *d = find_doc_by_cx_uri(srv, uri);
 		if (d) {
+			ws_index_update_doc(srv, d);
 			jval_set(td, "uri", jval_new_str(d->c_uri));
 			if (jval_get(params, "text")) {
 				jval_set(params, "text", jval_new_strn(
@@ -1993,29 +1633,93 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 		return;
 	}
 
-	/* Document-scoped requests (`completion`, `hover`, `definition`, `references`, etc.) */
+	/* Document-scoped requests (`completion`, `hover`, `definition`, `rename`, etc.) */
 	if (params && strncmp(method, "textDocument/", 13) == 0) {
 		jval *td = jval_get(params, "textDocument");
 		const char *uri = td ? jval_as_str(jval_get(td, "uri")) : NULL;
 		cx_doc *d = find_doc_by_cx_uri(srv, uri);
 		if (d) {
 			jval *pos = jval_get(params, "position");
+			long long xl = pos ? jval_as_int(jval_get(pos, "line"), 0) : 0;
+			long long xc = pos ? jval_as_int(jval_get(pos, "character"), 0) : 0;
 
-			/* Direct JSX tag / attribute completion */
+			req_kind rkind = REQ_DOC_REMAP;
+			jval *extra = NULL;
+
+			/* 1. Direct `.cx`-only providers (never need clangd) */
+			if (strcmp(method, "textDocument/foldingRange") == 0 && id) {
+				send_result_to_client(srv, id, cx_feat_folding_ranges(d));
+				return;
+			}
+			if (strcmp(method, "textDocument/linkedEditingRange") == 0 && pos && id) {
+				send_result_to_client(srv, id, cx_feat_linked_editing(d, xl, xc));
+				return;
+			}
+
+			/* 2. Native `.cx` interceptors with clangd fallback */
 			if (strcmp(method, "textDocument/completion") == 0 && pos && id) {
-				long long xl = jval_as_int(jval_get(pos, "line"), 0);
-				long long xc = jval_as_int(jval_get(pos, "character"), 0);
-				uint32_t cx_off = line_index_pos_to_off(
-				        &d->cx_lines, d->cx_text, d->cx_len, xl, xc);
-				jsx_ctx_info jctx;
-				classify_jsx_cursor(d->cx_text, d->cx_len, cx_off, &jctx);
-				if (jctx.kind == CTX_JSX_TAG || jctx.kind == CTX_JSX_ATTR) {
-					send_result_to_client(srv, id, build_jsx_completions(d, &jctx));
+				jval *res = cx_feat_completion(srv, d, xl, xc);
+				if (res) {
+					send_result_to_client(srv, id, res);
 					return;
 				}
+			} else if (strcmp(method, "textDocument/hover") == 0 && pos && id) {
+				jval *res = cx_feat_hover(srv, d, xl, xc);
+				if (res) {
+					send_result_to_client(srv, id, res);
+					return;
+				}
+				rkind = REQ_HOVER_SANITIZE;
+			} else if (strcmp(method, "textDocument/definition") == 0 && pos && id) {
+				jval *res = cx_feat_definition(srv, d, xl, xc);
+				if (res) {
+					send_result_to_client(srv, id, res);
+					return;
+				}
+				rkind = REQ_DEF_REMAP;
+			} else if (strcmp(method, "textDocument/documentSymbol") == 0 && id) {
+				jval *cx_syms = cx_feat_document_symbols(d);
+				if (srv->no_clangd) {
+					send_result_to_client(srv, id, cx_syms);
+					return;
+				}
+				rkind = REQ_DOC_SYMBOL_MERGE;
+				extra = cx_syms;
+			} else if (strcmp(method, "textDocument/prepareRename") == 0 && pos && id) {
+				jval *res = cx_feat_prepare_rename(srv, d, xl, xc);
+				if (res) {
+					send_result_to_client(srv, id, res);
+					return;
+				}
+			} else if (strcmp(method, "textDocument/rename") == 0 && pos && id) {
+				const char *new_name = jval_as_str(jval_get(params, "newName"));
+				int merge_clangd = 0;
+				jval *ws_edit = cx_feat_rename(srv, d, xl, xc, new_name, &merge_clangd);
+				if (ws_edit && (!merge_clangd || srv->no_clangd)) {
+					send_result_to_client(srv, id, ws_edit);
+					return;
+				}
+				if (ws_edit && merge_clangd) {
+					rkind = REQ_PROP_RENAME_MERGE;
+					extra = ws_edit;
+				} else {
+					rkind = REQ_RENAME_FILTER;
+				}
+			} else if (strcmp(method, "textDocument/codeAction") == 0 && id) {
+				const jval *orig_range = jval_get(params, "range");
+				const jval *ctx = jval_get(params, "context");
+				const jval *ctx_diags = ctx ? jval_get(ctx, "diagnostics") : NULL;
+				jval *cx_acts = cx_feat_code_actions(srv, d, orig_range, ctx_diags);
+				if (srv->no_clangd) {
+					send_result_to_client(srv, id, cx_acts);
+					return;
+				}
+				rkind = REQ_CODEACTION_MERGE;
+				extra = cx_acts;
 			}
 
 			if (srv->no_clangd) {
+				jval_free(extra);
 				if (id)
 					send_result_to_client(srv, id, jval_new_null());
 				return;
@@ -2023,12 +1727,13 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 
 			/* Map cursor position `.cx -> .c` */
 			if (pos && pos->kind == J_OBJ) {
-				long long xl = jval_as_int(jval_get(pos, "line"), 0);
-				long long xc = jval_as_int(jval_get(pos, "character"), 0);
 				long long cl = 0, cc = 0;
 				if (!map_cx_pos_to_c(d, xl, xc, &cl, &cc)) {
-					if (id)
-						send_result_to_client(srv, id, jval_new_null());
+					if (id) {
+						send_result_to_client(srv, id, extra ? extra : jval_new_null());
+						extra = NULL;
+					}
+					jval_free(extra);
 					return;
 				}
 				jval_set(pos, "line", jval_new_int(cl));
@@ -2038,26 +1743,32 @@ static void handle_client_msg(lsp_server *srv, jval *msg)
 			/* Map request range `.cx -> .c` if present (e.g. codeAction) */
 			jval *range = jval_get(params, "range");
 			if (range && range->kind == J_OBJ) {
-				jval *rs = jval_get(range, "start");
-				jval *re = jval_get(range, "end");
-				long long sl = 0, sc = 0, el = 0, ec = 0;
-				if (rs && map_cx_pos_to_c(d, jval_as_int(jval_get(rs, "line"), 0),
-				                          jval_as_int(jval_get(rs, "character"), 0), &sl, &sc))
-				{
-					jval_set(rs, "line", jval_new_int(sl));
-					jval_set(rs, "character", jval_new_int(sc));
+				if (!remap_range_obj_cx_to_c(d, range) && rkind == REQ_CODEACTION_MERGE) {
+					if (id) {
+						send_result_to_client(srv, id, extra ? extra : jval_new(J_ARR));
+						extra = NULL;
+					}
+					jval_free(extra);
+					return;
 				}
-				if (re && map_cx_pos_to_c(d, jval_as_int(jval_get(re, "line"), 0),
-				                          jval_as_int(jval_get(re, "character"), 0), &el, &ec))
-				{
-					jval_set(re, "line", jval_new_int(el));
-					jval_set(re, "character", jval_new_int(ec));
+			}
+
+			/* Also map context diagnostic ranges for codeAction */
+			if (rkind == REQ_CODEACTION_MERGE) {
+				jval *ctx = jval_get(params, "context");
+				jval *cd = ctx ? jval_get(ctx, "diagnostics") : NULL;
+				if (cd && cd->kind == J_ARR) {
+					for (size_t i = 0; i < cd->arr.len; i++)
+						remap_range_obj_cx_to_c(d, jval_get(cd->arr.items[i], "range"));
 				}
 			}
 
 			jval_set(td, "uri", jval_new_str(d->c_uri));
-			if (id)
-				track_req(srv, id, REQ_DOC_REMAP, d->cx_uri);
+			if (id) {
+				track_req_ex(srv, id, rkind, d->cx_uri, extra);
+				extra = NULL;
+			}
+			jval_free(extra);
 			send_lsp_json(srv->clangd_in, msg);
 			return;
 		}
@@ -2090,7 +1801,7 @@ static void handle_clangd_msg(lsp_server *srv, jval *msg)
 				jval_set(params, "diagnostics", diags);
 			}
 			remap_json_c_to_cx(srv, diags, d);
-			append_cx_diags(d, diags);
+			cx_feat_process_diags(srv, d, diags);
 		}
 		send_lsp_json(srv->client_out, msg);
 		return;
@@ -2100,44 +1811,46 @@ static void handle_clangd_msg(lsp_server *srv, jval *msg)
 	if (!method && id) {
 		req_kind kind = REQ_OTHER;
 		char *cx_uri = NULL;
-		if (pop_req(srv, id, &kind, &cx_uri)) {
+		jval *extra = NULL;
+		if (pop_req(srv, id, &kind, &cx_uri, &extra)) {
 			jval *res = jval_get(msg, "result");
-			if (kind == REQ_INITIALIZE && res && res->kind == J_OBJ) {
-				jval *caps = jval_get(res, "capabilities");
-				if (caps && caps->kind == J_OBJ) {
-					jval *comp = jval_get(caps, "completionProvider");
-					if (!comp || comp->kind != J_OBJ) {
-						comp = jval_new(J_OBJ);
-						jval_set(caps, "completionProvider", comp);
-					}
-					jval *trigs = jval_get(comp, "triggerCharacters");
-					if (!trigs || trigs->kind != J_ARR) {
-						trigs = jval_new(J_ARR);
-						jval_set(comp, "triggerCharacters", trigs);
-					}
-					int has_lt = 0;
-					for (size_t i = 0; i < trigs->arr.len; i++) {
-						const char *s = jval_as_str(trigs->arr.items[i]);
-						if (s && strcmp(s, "<") == 0)
-							has_lt = 1;
-					}
-					if (!has_lt)
-						jval_push(trigs, jval_new_str("<"));
+			cx_doc *d = cx_uri ? find_doc_by_cx_uri(srv, cx_uri) : NULL;
 
-					/* Strip capabilities whose wire formats or edits operate in shadow-C
-					 * coordinates without range remapping (e.g., delta-encoded semanticTokens
-					 * and clang-format). Tree-sitter handles .cx syntax highlighting cleanly. */
-					jval_del(caps, "semanticTokensProvider");
-					jval_del(caps, "documentFormattingProvider");
-					jval_del(caps, "documentRangeFormattingProvider");
-					jval_del(caps, "documentOnTypeFormattingProvider");
-					jval_del(caps, "foldingRangeProvider");
-					jval_del(caps, "inlayHintProvider");
-				}
+			if (kind == REQ_INITIALIZE && res && res->kind == J_OBJ) {
+				apply_cx_capabilities(jval_get(res, "capabilities"));
 			} else if (kind == REQ_DOC_REMAP && res) {
-				cx_doc *d = find_doc_by_cx_uri(srv, cx_uri);
 				remap_json_c_to_cx(srv, res, d);
+			} else if (kind == REQ_HOVER_SANITIZE && res) {
+				remap_json_c_to_cx(srv, res, d);
+				cx_feat_sanitize_hover(res);
+			} else if (kind == REQ_DEF_REMAP && res) {
+				remap_json_c_to_cx(srv, res, d);
+				cx_feat_remap_def_result(srv, d, res);
+			} else if (kind == REQ_DOC_SYMBOL_MERGE) {
+				if (res)
+					remap_json_c_to_cx(srv, res, d);
+				jval *merged = cx_feat_merge_doc_symbols(d, extra, res);
+				extra = NULL;
+				jval_set(msg, "result", merged);
+				jval_del(msg, "error");
+			} else if (kind == REQ_RENAME_FILTER && res) {
+				cx_feat_filter_clangd_rename(srv, res);
+			} else if (kind == REQ_PROP_RENAME_MERGE) {
+				if (res && res->kind == J_OBJ) {
+					cx_feat_filter_clangd_rename(srv, res);
+					cx_feat_merge_workspace_edits(extra, res);
+				}
+				jval_set(msg, "result", extra ? extra : jval_new_null());
+				jval_del(msg, "error");
+				extra = NULL;
+			} else if (kind == REQ_CODEACTION_MERGE) {
+				jval *merged = cx_feat_merge_code_actions(srv, extra, res);
+				extra = NULL;
+				jval_set(msg, "result", merged);
+				jval_del(msg, "error");
 			}
+
+			jval_free(extra);
 			free(cx_uri);
 		}
 		send_lsp_json(srv->client_out, msg);
@@ -2358,7 +2071,10 @@ int main(int argc, char **argv)
 	for (size_t i = 0; i < srv.req_count; i++) {
 		free(srv.reqs[i].id_key);
 		free(srv.reqs[i].cx_uri);
+		jval_free(srv.reqs[i].extra);
 	}
 	free(srv.reqs);
+	ws_index_free(&srv.ws);
+	free(srv.root_path);
 	return 0;
 }

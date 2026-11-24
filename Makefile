@@ -8,7 +8,7 @@ LDLIBS-bud_test := -lbud
 LDLIBS-bud_reconcile_test := -lbud
 cx-obj-y := src/cx_transpile.o
 cx_test-obj-y := src/cx_transpile.o
-cx-lsp-obj-y := src/cx_transpile.o
+cx-lsp-obj-y := src/cx_transpile.o src/cx_lsp_index.o src/cx_lsp_features.o
 
 WASM_SRCS := src/libbud.c src/bud_tpl.c src/bud_render.c src/bud_runtime.c src/bud_json.c src/bud_reconcile.c npm/wasm/bud_wasm.c
 WASM_EXPORTS := bud_element bud_text bud_set_attr bud_append bud_render_html bud_vdom_diff bud_free

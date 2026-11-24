@@ -182,7 +182,39 @@ typedef struct {
 	char    *name;
 	uint32_t decl_off;
 	uint32_t decl_len;
+	uint32_t name_off;
+	uint32_t name_len;
 } cx_param;
+
+/* ── Flat Metadata Lists (populated only when build_index != 0) ───────── */
+
+#define CX_DEF_LIST(T, Name) \
+	typedef struct { \
+		T     *items; \
+		size_t count; \
+		size_t cap; \
+		int    oom; \
+	} Name; \
+	static T *Name##_push(Name *l) { \
+		if (l->oom) return NULL; \
+		if (l->count >= l->cap) { \
+			size_t ncap = l->cap ? l->cap * 2 : 16; \
+			T *p = (T *)realloc(l->items, ncap * sizeof(*p)); \
+			if (!p) { l->oom = 1; return NULL; } \
+			l->items = p; \
+			l->cap = ncap; \
+		} \
+		T *it = &l->items[l->count++]; \
+		memset(it, 0, sizeof(*it)); \
+		return it; \
+	}
+
+CX_DEF_LIST(cx_comp_meta,       cx_comp_list)
+CX_DEF_LIST(cx_comp_param_meta, cx_cparam_list)
+CX_DEF_LIST(cx_elem_meta,       cx_elem_list)
+CX_DEF_LIST(cx_attr_meta,       cx_attr_list)
+CX_DEF_LIST(cx_closure_meta,    cx_closure_list)
+CX_DEF_LIST(cx_include_meta,    cx_include_list)
 
 /* ── Parser State ─────────────────────────────────────────────────────── */
 
@@ -196,6 +228,7 @@ typedef struct {
 	const char *filename;
 	int         emit_lines;
 	int         recover;
+	int         build_index;
 
 	cx_buf       out;
 	cx_buf       hoist;
@@ -205,6 +238,13 @@ typedef struct {
 	cx_span_list body_spans;
 	cx_diag_list diags;
 
+	cx_comp_list    idx_comps;
+	cx_cparam_list  idx_cparams;
+	cx_elem_list    idx_elems;
+	cx_attr_list    idx_attrs;
+	cx_closure_list idx_closures;
+	cx_include_list idx_includes;
+
 	int      brace_depth;
 	uint32_t next_node_id;
 	uint32_t next_closure_id;
@@ -213,6 +253,14 @@ typedef struct {
 	cx_param *comp_params;
 	size_t    comp_param_count;
 	int       comp_brace_depth;
+	int32_t   active_comp_idx;
+	int32_t   active_elem_idx;
+	int       direct_in_loop;
+
+	/* Preceding top-level doc comment tracker (`///` or block doc comment) */
+	uint32_t  last_doc_off;
+	uint32_t  last_doc_len;
+	int       doc_nl_gap;
 } cx_state;
 
 /* ── Lexer Primitives ─────────────────────────────────────────────────── */
@@ -417,8 +465,40 @@ static void scan_preprocessor_line(cx_state *st, cx_buf *dst, cx_span_list *span
 			break;
 		}
 	}
-	span_push(spans, cx_start, (uint32_t)(st->pos - cx_start),
+	uint32_t cx_len = (uint32_t)(st->pos - cx_start);
+	span_push(spans, cx_start, cx_len,
 	          c_start, (uint32_t)(dst->len - c_start), CX_SPAN_PASSTHROUGH);
+
+	if (st->build_index && cx_len > 8) {
+		size_t p = cx_start + 1; /* skip '#' */
+		size_t end = cx_start + cx_len;
+		while (p < end && (st->src[p] == ' ' || st->src[p] == '\t'))
+			p++;
+		if (p + 7 <= end && memcmp(st->src + p, "include", 7) == 0 &&
+		    (p + 7 == end || !is_ident_char(st->src[p + 7])))
+		{
+			p += 7;
+			while (p < end && (st->src[p] == ' ' || st->src[p] == '\t'))
+				p++;
+			if (p < end && (st->src[p] == '"' || st->src[p] == '<')) {
+				char close_ch = (st->src[p] == '"') ? '"' : '>';
+				uint8_t is_sys = (st->src[p] == '<') ? 1 : 0;
+				size_t ps = ++p;
+				while (p < end && st->src[p] != close_ch && st->src[p] != '\n')
+					p++;
+				if (p < end && st->src[p] == close_ch && p > ps) {
+					cx_include_meta *inc = cx_include_list_push(&st->idx_includes);
+					if (inc) {
+						inc->path.off = (uint32_t)ps;
+						inc->path.len = (uint32_t)(p - ps);
+						inc->full.off = cx_start;
+						inc->full.len = cx_len;
+						inc->is_system = is_sys;
+					}
+				}
+			}
+		}
+	}
 }
 
 /* ── Parameter & Declarator Helpers ───────────────────────────────────── */
@@ -444,13 +524,15 @@ static void trim_slice(const char **s, size_t *n)
 	}
 }
 
-/* Extract identifier name from a C declarator like `const char *const *songs`,
- * `int arr[4]`, or `void (*cb)(int)`. Returns heap string or NULL. */
-static char *extract_decl_name(const char *s, size_t n)
+/* Extract identifier name slice (relative to `s`) from a C declarator like
+ * `const char *const *songs`, `int arr[4]`, or `void (*cb)(int)`. */
+static int extract_decl_name_slice(
+        const char *s, size_t n, size_t *out_off, size_t *out_len)
 {
+	const char *orig = s;
 	trim_slice(&s, &n);
 	if (n == 0)
-		return NULL;
+		return 0;
 
 	/* Check for function pointer declarator `(*name)(...)` */
 	for (size_t i = 0; i + 2 < n; i++) {
@@ -462,7 +544,6 @@ static char *extract_decl_name(const char *s, size_t n)
 				j++;
 				while (j < n && (s[j] == '*' || isspace((unsigned char)s[j])))
 					j++;
-				/* Skip qualifiers like const/restrict inside (*const name) */
 				const char *last_id = NULL;
 				size_t last_len = 0;
 				while (j < n && s[j] != ')') {
@@ -476,8 +557,11 @@ static char *extract_decl_name(const char *s, size_t n)
 						j++;
 					}
 				}
-				if (last_id && last_len > 0)
-					return cx_strndup(last_id, last_len);
+				if (last_id && last_len > 0) {
+					*out_off = (size_t)(last_id - orig);
+					*out_len = last_len;
+					return 1;
+				}
 			}
 		}
 	}
@@ -506,10 +590,21 @@ static char *extract_decl_name(const char *s, size_t n)
 	size_t id_end = end;
 	while (end > 0 && is_ident_char(s[end - 1]))
 		end--;
-	if (end < id_end && is_ident_start(s[end]))
-		return cx_strndup(s + end, id_end - end);
+	if (end < id_end && is_ident_start(s[end])) {
+		*out_off = (size_t)((s + end) - orig);
+		*out_len = id_end - end;
+		return 1;
+	}
 
-	return NULL;
+	return 0;
+}
+
+static char *extract_decl_name(const char *s, size_t n)
+{
+	size_t off = 0, len = 0;
+	if (!extract_decl_name_slice(s, n, &off, &len))
+		return NULL;
+	return cx_strndup(s + off, len);
 }
 
 /* Parse comma-separated parameter list slice into cx_param array. */
@@ -542,22 +637,27 @@ static size_t parse_param_slice(
 			size_t slen = i - start;
 			trim_slice(&seg, &slen);
 			if (slen > 0) {
-				char *name = extract_decl_name(seg, slen);
-				if (name) {
-					if (count >= cap) {
-						cap *= 2;
-						cx_param *np = (cx_param *)realloc(arr, cap * sizeof(*np));
-						if (!np) {
-							free(name);
-							break;
+				size_t rel_off = 0, rel_len = 0;
+				if (extract_decl_name_slice(seg, slen, &rel_off, &rel_len)) {
+					char *name = cx_strndup(seg + rel_off, rel_len);
+					if (name) {
+						if (count >= cap) {
+							cap *= 2;
+							cx_param *np = (cx_param *)realloc(arr, cap * sizeof(*np));
+							if (!np) {
+								free(name);
+								break;
+							}
+							arr = np;
 						}
-						arr = np;
+						arr[count].decl = cx_strndup(seg, slen);
+						arr[count].name = name;
+						arr[count].decl_off = base_src ? (uint32_t)(seg - base_src) : 0;
+						arr[count].decl_len = (uint32_t)slen;
+						arr[count].name_off = base_src ? (uint32_t)((seg + rel_off) - base_src) : 0;
+						arr[count].name_len = (uint32_t)rel_len;
+						count++;
 					}
-					arr[count].decl = cx_strndup(seg, slen);
-					arr[count].name = name;
-					arr[count].decl_off = base_src ? (uint32_t)(seg - base_src) : 0;
-					arr[count].decl_len = (uint32_t)slen;
-					count++;
 				}
 			}
 			start = i + 1;
@@ -791,9 +891,12 @@ static void parse_and_lift_closure(
 	/* Optional parameter list `(bud_event *e)` or `()` */
 	char *ev_param_decl = NULL;
 	char *ev_param_name = NULL;
+	uint32_t param_off = 0, param_len = 0;
 	if (peek_at(st, 0) == '(') {
 		size_t ps = 0, pe = 0;
 		if (scan_balanced_raw(st, '(', ')', &ps, &pe)) {
+			param_off = (uint32_t)ps;
+			param_len = (uint32_t)(pe - ps);
 			const char *pstr = st->src + ps;
 			size_t plen = pe - ps;
 			trim_slice(&pstr, &plen);
@@ -819,6 +922,7 @@ static void parse_and_lift_closure(
 
 	uint32_t cid = ++st->next_closure_id;
 	uint32_t body_line = st->line;
+	uint32_t body_off = (uint32_t)st->pos;
 
 	/* Emit hoisted struct + trampoline function into st->hoist */
 	emit_line_directive(st, &st->hoist, cl_line);
@@ -848,6 +952,22 @@ static void parse_and_lift_closure(
 	if (peek_at(st, 0) == '}')
 		advance(st);
 	buf_str(&st->hoist, "\n}\n\treturn 0;\n}\n");
+
+	if (st->build_index) {
+		cx_closure_meta *cm = cx_closure_list_push(&st->idx_closures);
+		if (cm) {
+			cm->captures.off = (uint32_t)cap_s;
+			cm->captures.len = (uint32_t)(cap_e - cap_s);
+			cm->params.off = param_off;
+			cm->params.len = param_len;
+			cm->body.off = body_off;
+			cm->body.len = (uint32_t)(st->pos - body_off);
+			cm->full.off = cl_off;
+			cm->full.len = (uint32_t)(st->pos - cl_off);
+			cm->comp_idx = st->active_comp_idx;
+			cm->id = cid;
+		}
+	}
 
 	/* Emit bud_bind_ctx at the call site */
 	if (cap_count > 0) {
@@ -1030,7 +1150,8 @@ static void attr_free(cx_attr *a)
 
 static void parse_jsx_children(
         cx_state *st, cx_buf *dst, cx_span_list *spans,
-        const char *parent_var, const char *closing_tag)
+        const char *parent_var, const char *closing_tag,
+        cx_slice *out_close_tag)
 {
 	while (st->pos < st->len) {
 		char c = peek_at(st, 0);
@@ -1052,6 +1173,10 @@ static void parse_jsx_children(
 			else
 				add_diag(st, cl_line, cl_col, cl_off, "expected '>' in closing tag");
 
+			if (out_close_tag) {
+				out_close_tag->off = (uint32_t)tstart;
+				out_close_tag->len = (uint32_t)tlen;
+			}
 			if (closing_tag) {
 				if (strlen(closing_tag) != tlen ||
 				    memcmp(closing_tag, st->src + tstart, tlen) != 0)
@@ -1097,7 +1222,10 @@ static void parse_jsx_children(
 					buf_str(dst, ")");
 					span_push(spans, f_off, (uint32_t)(st->pos - f_off),
 					          c_off, (uint32_t)(dst->len - c_off), CX_SPAN_LOOP);
+					int prev_loop = st->direct_in_loop;
+					st->direct_in_loop = 1;
 					parse_jsx_stmt_body(st, dst, spans, parent_var);
+					st->direct_in_loop = prev_loop;
 				}
 				skip_ws_and_comments(st);
 				if (peek_at(st, 0) == '}')
@@ -1172,20 +1300,44 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 {
 	uint32_t start_line = st->line, start_col = st->col;
 	uint32_t start_off = (uint32_t)st->pos;
+	int32_t prev_elem = st->active_elem_idx;
+	int prev_loop = st->direct_in_loop;
 
 	advance(st); /* consume '<' */
 
 	/* Fragment `<> ... </>` */
 	if (peek_at(st, 0) == '>') {
 		advance(st);
+		int32_t elem_idx = -1;
+		if (st->build_index) {
+			cx_elem_meta *em = cx_elem_list_push(&st->idx_elems);
+			if (em) {
+				elem_idx = (int32_t)(st->idx_elems.count - 1);
+				em->full.off = start_off;
+				em->parent = prev_elem;
+				em->comp_idx = st->active_comp_idx;
+				em->in_loop_direct = (uint8_t)(prev_loop ? 1 : 0);
+			}
+		}
+		st->active_elem_idx = elem_idx;
+		st->direct_in_loop = 0;
+
 		uint32_t nid = ++st->next_node_id;
 		char var[32];
 		snprintf(var, sizeof(var), "__cx_n%u", nid);
 
 		emit_line_directive(st, dst, start_line);
 		buf_printf(dst, "__extension__ ({\n\tbud_node *%s = bud_fragment();\n", var);
-		parse_jsx_children(st, dst, spans, var, "");
+		cx_slice close_tag = { 0, 0 };
+		parse_jsx_children(st, dst, spans, var, "", &close_tag);
 		buf_printf(dst, "\t%s;\n})", var);
+
+		if (elem_idx >= 0) {
+			st->idx_elems.items[elem_idx].close_tag = close_tag;
+			st->idx_elems.items[elem_idx].full.len = (uint32_t)(st->pos - start_off);
+		}
+		st->active_elem_idx = prev_elem;
+		st->direct_in_loop = prev_loop;
 		return;
 	}
 
@@ -1202,6 +1354,23 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 	char *tag = cx_strndup(st->src + tag_off, tag_len);
 	int is_component = isupper((unsigned char)tag[0]);
 
+	int32_t elem_idx = -1;
+	if (st->build_index) {
+		cx_elem_meta *em = cx_elem_list_push(&st->idx_elems);
+		if (em) {
+			elem_idx = (int32_t)(st->idx_elems.count - 1);
+			em->tag.off = tag_off;
+			em->tag.len = (uint32_t)tag_len;
+			em->full.off = start_off;
+			em->parent = prev_elem;
+			em->comp_idx = st->active_comp_idx;
+			em->is_component = (uint8_t)(is_component ? 1 : 0);
+			em->in_loop_direct = (uint8_t)(prev_loop ? 1 : 0);
+		}
+	}
+	st->active_elem_idx = elem_idx;
+	st->direct_in_loop = 0;
+
 	uint32_t nid = ++st->next_node_id;
 	char var[32];
 	snprintf(var, sizeof(var), "__cx_n%u", nid);
@@ -1212,8 +1381,10 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 	/* Parse attributes */
 	cx_attr *attrs = NULL;
 	size_t attr_count = 0, attr_cap = 0;
+	cx_attr_list local_attrs = { 0 };
 	int self_closing = 0;
 	int header_closed = 0;
+	int has_key = 0;
 
 	/* For HTML elements, emit element creation immediately so closures & attrs stream cleanly */
 	if (!is_component) {
@@ -1254,8 +1425,17 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 			advance(st);
 		size_t an_len = st->pos - an_off;
 		char *aname = cx_strndup(st->src + an_off, an_len);
+		int is_key = (an_len == 3 && memcmp(aname, "key", 3) == 0);
+		if (is_key)
+			has_key = 1;
 
 		skip_ws_and_comments(st);
+
+		cx_attr_meta am;
+		memset(&am, 0, sizeof(am));
+		am.name.off = an_off;
+		am.name.len = (uint32_t)an_len;
+		am.full.off = an_off;
 
 		if (!is_component) {
 			/* Direct emission on HTML element */
@@ -1266,13 +1446,19 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 				buf_escaped_cstr(dst, aname, an_len);
 				buf_str(dst, ", \"\");\n");
 				span_push(spans, an_off, (uint32_t)an_len, ac, (uint32_t)an_len, CX_SPAN_ATTR);
+				am.val_kind = CX_ATTR_BOOL;
+				am.full.len = (uint32_t)an_len;
+				if (st->build_index) {
+					cx_attr_meta *slot = cx_attr_list_push(&local_attrs);
+					if (slot)
+						*slot = am;
+				}
 				free(aname);
 				continue;
 			}
 			advance(st); /* '=' */
 			skip_ws_and_comments(st);
 
-			int is_key = (an_len == 3 && memcmp(aname, "key", 3) == 0);
 			int is_event = (an_len >= 3 && aname[0] == 'o' && aname[1] == 'n' &&
 			                isupper((unsigned char)aname[2]));
 
@@ -1288,6 +1474,11 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 				if (peek_at(st, 0) == '"')
 					advance(st);
 
+				am.val_kind = CX_ATTR_STRING;
+				am.val.off = (uint32_t)vs;
+				am.val.len = (uint32_t)(ve - vs);
+				am.full.len = (uint32_t)(st->pos - an_off);
+
 				if (is_key) {
 					buf_printf(dst, "\tbud_set_key(%s, \"%.*s\");\n",
 					           var, (int)(ve - vs), st->src + vs);
@@ -1302,6 +1493,8 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 				uint32_t bline = st->line, bcol = st->col, boff = (uint32_t)st->pos;
 				advance(st); /* '{' */
 				skip_ws_and_comments(st);
+				uint32_t val_s = (uint32_t)st->pos;
+				am.val_kind = CX_ATTR_EXPR;
 
 				if (is_event) {
 					char ev_lower[64];
@@ -1313,6 +1506,7 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 					ev_lower[elen] = '\0';
 
 					if (peek_at(st, 0) == '[') {
+						am.val_kind = CX_ATTR_CLOSURE;
 						parse_and_lift_closure(st, dst, var, ev_lower);
 						skip_ws_and_comments(st);
 					} else {
@@ -1334,13 +1528,23 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 					buf_str(dst, "));\n");
 				}
 
+				uint32_t val_e = (uint32_t)st->pos;
 				if (peek_at(st, 0) == '}')
 					advance(st);
 				else
 					add_diag(st, bline, bcol, boff, "unterminated '{' in attribute '%s'", aname);
+				am.val.off = val_s;
+				am.val.len = (val_e >= val_s) ? (val_e - val_s) : 0;
+				am.full.len = (uint32_t)(st->pos - an_off);
 			} else {
 				add_diag(st, st->line, st->col, (uint32_t)st->pos,
 				         "expected '\"' or '{' after '%s='", aname);
+				am.full.len = (uint32_t)(st->pos - an_off);
+			}
+			if (st->build_index) {
+				cx_attr_meta *slot = cx_attr_list_push(&local_attrs);
+				if (slot)
+					*slot = am;
 			}
 			free(aname);
 		} else {
@@ -1363,6 +1567,13 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 
 			if (peek_at(st, 0) != '=') {
 				a->is_bool_bare = 1;
+				am.val_kind = CX_ATTR_BOOL;
+				am.full.len = (uint32_t)an_len;
+				if (st->build_index) {
+					cx_attr_meta *slot = cx_attr_list_push(&local_attrs);
+					if (slot)
+						*slot = am;
+				}
 				continue;
 			}
 			advance(st); /* '=' */
@@ -1370,25 +1581,59 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 
 			if (peek_at(st, 0) == '"') {
 				a->is_string = 1;
+				size_t vs = st->pos + 1;
 				scan_string(st, &a->val_code, '"');
+				size_t ve = (st->pos > vs && st->src[st->pos - 1] == '"')
+				            ? (st->pos - 1) : st->pos;
+				am.val_kind = CX_ATTR_STRING;
+				am.val.off = (uint32_t)vs;
+				am.val.len = (uint32_t)(ve - vs);
+				am.full.len = (uint32_t)(st->pos - an_off);
 			} else if (peek_at(st, 0) == '{') {
 				uint32_t bline = st->line, bcol = st->col, boff = (uint32_t)st->pos;
 				advance(st);
+				uint32_t val_s = (uint32_t)st->pos;
 				transpile_c_until(st, &a->val_code, &a->val_spans, '}', 1, CX_SPAN_EXPR);
+				uint32_t val_e = (uint32_t)st->pos;
 				if (peek_at(st, 0) == '}')
 					advance(st);
 				else
 					add_diag(st, bline, bcol, boff, "unterminated '{' in prop '%s'", aname);
+				am.val_kind = CX_ATTR_EXPR;
+				am.val.off = val_s;
+				am.val.len = (val_e >= val_s) ? (val_e - val_s) : 0;
+				am.full.len = (uint32_t)(st->pos - an_off);
 			} else {
 				add_diag(st, st->line, st->col, (uint32_t)st->pos,
 				         "expected '\"' or '{' after prop '%s='", aname);
+				am.full.len = (uint32_t)(st->pos - an_off);
+			}
+			if (st->build_index) {
+				cx_attr_meta *slot = cx_attr_list_push(&local_attrs);
+				if (slot)
+					*slot = am;
 			}
 		}
 	}
 
+	if (elem_idx >= 0) {
+		uint32_t astart = (uint32_t)st->idx_attrs.count;
+		for (size_t i = 0; i < local_attrs.count; i++) {
+			cx_attr_meta *dst_a = cx_attr_list_push(&st->idx_attrs);
+			if (dst_a)
+				*dst_a = local_attrs.items[i];
+		}
+		st->idx_elems.items[elem_idx].attr_start = astart;
+		st->idx_elems.items[elem_idx].attr_count = (uint32_t)(st->idx_attrs.count - astart);
+		st->idx_elems.items[elem_idx].is_self_closing = (uint8_t)(self_closing ? 1 : 0);
+		st->idx_elems.items[elem_idx].has_key_attr = (uint8_t)(has_key ? 1 : 0);
+	}
+	free(local_attrs.items);
+
 	if (!header_closed)
 		add_diag(st, start_line, start_col, start_off, "unterminated opening tag '<%s'", tag);
 
+	cx_slice close_tag = { 0, 0 };
 	if (is_component) {
 		/* If component has children, build fragment first */
 		char ch_var[32] = { 0 };
@@ -1397,7 +1642,7 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 			uint32_t ch_id = ++st->next_node_id;
 			snprintf(ch_var, sizeof(ch_var), "__cx_ch%u", ch_id);
 			buf_printf(dst, "\tbud_node *%s = bud_fragment();\n", ch_var);
-			parse_jsx_children(st, dst, spans, ch_var, tag);
+			parse_jsx_children(st, dst, spans, ch_var, tag, &close_tag);
 		}
 
 		/* Emit bud_component_vnode(Tag_render, NULL, &(Tag_props){ ... }, sizeof(Tag_props)) */
@@ -1473,8 +1718,15 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 		free(attrs);
 	} else {
 		if (!self_closing && header_closed)
-			parse_jsx_children(st, dst, spans, var, tag);
+			parse_jsx_children(st, dst, spans, var, tag, &close_tag);
 	}
+
+	if (elem_idx >= 0) {
+		st->idx_elems.items[elem_idx].close_tag = close_tag;
+		st->idx_elems.items[elem_idx].full.len = (uint32_t)(st->pos - start_off);
+	}
+	st->active_elem_idx = prev_elem;
+	st->direct_in_loop = prev_loop;
 
 	buf_printf(dst, "\t%s;\n})", var);
 	free(tag);
@@ -1536,6 +1788,7 @@ static void parse_component_decl(cx_state *st)
 	if (!peek_component_decl(st, &is_static, &name_pos))
 		return;
 
+	uint32_t decl_off = (uint32_t)st->pos;
 	uint32_t decl_line = st->line;
 	while (st->pos < name_pos)
 		advance(st);
@@ -1549,9 +1802,40 @@ static void parse_component_decl(cx_state *st)
 	skip_ws_and_comments(st);
 	size_t ps = 0, pe = 0;
 	scan_balanced_raw(st, '(', ')', &ps, &pe);
+	uint32_t decl_end = (uint32_t)st->pos;
 
 	clear_comp_params(st);
 	st->comp_param_count = parse_param_slice(st->src, st->src + ps, pe - ps, &st->comp_params);
+
+	int32_t comp_idx = -1;
+	if (st->build_index) {
+		cx_comp_meta *cm = cx_comp_list_push(&st->idx_comps);
+		if (cm) {
+			comp_idx = (int32_t)(st->idx_comps.count - 1);
+			cm->name.off = name_off;
+			cm->name.len = (uint32_t)name_len;
+			cm->decl.off = decl_off;
+			cm->decl.len = (decl_end >= decl_off) ? (decl_end - decl_off) : 0;
+			if (st->last_doc_len > 0 && st->doc_nl_gap <= 1) {
+				cm->doc.off = st->last_doc_off;
+				cm->doc.len = st->last_doc_len;
+			}
+			cm->param_start = (uint32_t)st->idx_cparams.count;
+			for (size_t i = 0; i < st->comp_param_count; i++) {
+				cx_comp_param_meta *pm = cx_cparam_list_push(&st->idx_cparams);
+				if (pm) {
+					pm->decl.off = st->comp_params[i].decl_off;
+					pm->decl.len = st->comp_params[i].decl_len;
+					pm->name.off = st->comp_params[i].name_off;
+					pm->name.len = st->comp_params[i].name_len;
+				}
+			}
+			cm->param_count = (uint32_t)(st->idx_cparams.count - cm->param_start);
+			cm->is_static = (uint8_t)(is_static ? 1 : 0);
+		}
+	}
+	st->last_doc_off = 0;
+	st->last_doc_len = 0;
 
 	/* Emit props struct into st->hoist */
 	emit_line_directive(st, &st->hoist, decl_line);
@@ -1578,6 +1862,8 @@ static void parse_component_decl(cx_state *st)
 	/* Forward declaration: `component Foo(...);` */
 	if (peek_at(st, 0) == ';') {
 		advance(st);
+		if (comp_idx >= 0)
+			st->idx_comps.items[comp_idx].is_forward = 1;
 		emit_line_directive(st, &st->body, decl_line);
 		buf_printf(&st->body, "%sbud_node *", is_static ? "static " : "");
 		uint32_t fn_c_off = (uint32_t)st->body.len;
@@ -1599,9 +1885,13 @@ static void parse_component_decl(cx_state *st)
 	}
 
 	uint32_t body_line = st->line;
+	uint32_t body_off = (uint32_t)st->pos;
 	advance(st); /* consume '{' */
 	st->brace_depth++;
 	st->comp_brace_depth = st->brace_depth;
+	st->active_comp_idx = comp_idx;
+	if (comp_idx >= 0)
+		st->idx_comps.items[comp_idx].body.off = body_off;
 
 	emit_line_directive(st, &st->body, decl_line);
 	buf_printf(&st->body, "%sbud_node *", is_static ? "static " : "");
@@ -1664,15 +1954,25 @@ static void transpile_c_until(
 		if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
 			uint32_t s_off = (uint32_t)st->pos;
 			uint32_t c_off = (uint32_t)dst->len;
+			int nls = 0;
 			while (st->pos < st->len) {
 				char wc = peek_at(st, 0);
 				if (wc == ' ' || wc == '\t' || wc == '\r' || wc == '\n') {
 					advance(st);
 					buf_ch(dst, wc);
-					if (wc == '\n')
+					if (wc == '\n') {
 						at_line_start = 1;
+						nls++;
+					}
 				} else {
 					break;
+				}
+			}
+			if (stop_ch == '\0' && st->brace_depth == 0 && st->last_doc_len > 0) {
+				st->doc_nl_gap += nls;
+				if (st->doc_nl_gap > 2) {
+					st->last_doc_off = 0;
+					st->last_doc_len = 0;
 				}
 			}
 			span_push(spans, s_off, (uint32_t)(st->pos - s_off),
@@ -1682,6 +1982,8 @@ static void transpile_c_until(
 
 		/* Preprocessor directive at start of line */
 		if (c == '#' && at_line_start) {
+			st->last_doc_off = 0;
+			st->last_doc_len = 0;
 			if (stop_ch == '\0' && st->brace_depth == 0) {
 				flush_top_level(st);
 				scan_preprocessor_line(st, dst, spans);
@@ -1697,22 +1999,47 @@ static void transpile_c_until(
 		/* Comments preserve allow_jsx */
 		if (c == '/' && peek_at(st, 1) == '/') {
 			uint32_t s_off = (uint32_t)st->pos, c_off = (uint32_t)dst->len;
+			int is_doc = (stop_ch == '\0' && st->brace_depth == 0 &&
+			              peek_at(st, 2) == '/');
 			scan_line_comment(st, dst);
-			span_push(spans, s_off, (uint32_t)(st->pos - s_off),
+			uint32_t slen = (uint32_t)(st->pos - s_off);
+			span_push(spans, s_off, slen,
 			          c_off, (uint32_t)(dst->len - c_off), passthrough_kind);
+			if (st->build_index && is_doc) {
+				if (st->last_doc_len > 0 && st->doc_nl_gap <= 1) {
+					st->last_doc_len = (uint32_t)(st->pos - st->last_doc_off);
+				} else {
+					st->last_doc_off = s_off;
+					st->last_doc_len = slen;
+				}
+				st->doc_nl_gap = 0;
+			} else if (stop_ch == '\0' && st->brace_depth == 0) {
+				st->last_doc_off = 0;
+				st->last_doc_len = 0;
+			}
 			at_line_start = 1;
 			continue;
 		}
 		if (c == '/' && peek_at(st, 1) == '*') {
 			uint32_t s_off = (uint32_t)st->pos, c_off = (uint32_t)dst->len;
+			int is_doc = (stop_ch == '\0' && st->brace_depth == 0 &&
+			              peek_at(st, 2) == '*');
 			scan_block_comment(st, dst);
-			span_push(spans, s_off, (uint32_t)(st->pos - s_off),
+			uint32_t slen = (uint32_t)(st->pos - s_off);
+			span_push(spans, s_off, slen,
 			          c_off, (uint32_t)(dst->len - c_off), passthrough_kind);
+			if (st->build_index && is_doc) {
+				st->last_doc_off = s_off;
+				st->last_doc_len = slen;
+				st->doc_nl_gap = 0;
+			}
 			continue;
 		}
 
 		/* String / char literals */
 		if (c == '"' || c == '\'') {
+			st->last_doc_off = 0;
+			st->last_doc_len = 0;
 			uint32_t s_off = (uint32_t)st->pos, c_off = (uint32_t)dst->len;
 			scan_string(st, dst, c);
 			span_push(spans, s_off, (uint32_t)(st->pos - s_off),
@@ -1730,6 +2057,11 @@ static void transpile_c_until(
 				allow_jsx = 0;
 				continue;
 			}
+		}
+
+		if (stop_ch == '\0' && st->brace_depth == 0) {
+			st->last_doc_off = 0;
+			st->last_doc_len = 0;
 		}
 
 		/* Identifiers & keywords */
@@ -1806,8 +2138,14 @@ static void transpile_c_until(
 			allow_jsx = 0;
 		} else if (c == '}') {
 			if (stop_ch == '\0') {
-				if (st->brace_depth == st->comp_brace_depth)
+				if (st->brace_depth == st->comp_brace_depth) {
+					if (st->active_comp_idx >= 0) {
+						cx_comp_meta *cm = &st->idx_comps.items[st->active_comp_idx];
+						cm->body.len = (uint32_t)(st->pos - cm->body.off);
+						st->active_comp_idx = -1;
+					}
 					clear_comp_params(st);
+				}
 				if (st->brace_depth > 0)
 					st->brace_depth--;
 				if (st->brace_depth == 0)
@@ -1846,7 +2184,10 @@ int cx_transpile(const cx_options *opt, const char *src, size_t len, cx_result *
 	st.filename = (opt && opt->filename) ? opt->filename : "<input>.cx";
 	st.emit_lines = opt ? opt->emit_lines : 1;
 	st.recover = opt ? opt->recover : 0;
+	st.build_index = opt ? opt->build_index : 0;
 	st.comp_brace_depth = -1;
+	st.active_comp_idx = -1;
+	st.active_elem_idx = -1;
 
 	if (st.emit_lines)
 		emit_line_directive(&st, &st.out, 1);
@@ -1857,7 +2198,9 @@ int cx_transpile(const cx_options *opt, const char *src, size_t len, cx_result *
 
 	if (st.out.oom || st.hoist.oom || st.body.oom ||
 	    st.out_spans.oom || st.hoist_spans.oom || st.body_spans.oom ||
-	    st.diags.oom)
+	    st.diags.oom || st.idx_comps.oom || st.idx_cparams.oom ||
+	    st.idx_elems.oom || st.idx_attrs.oom || st.idx_closures.oom ||
+	    st.idx_includes.oom)
 	{
 		buf_free(&st.out);
 		buf_free(&st.hoist);
@@ -1866,6 +2209,12 @@ int cx_transpile(const cx_options *opt, const char *src, size_t len, cx_result *
 		span_list_free(&st.hoist_spans);
 		span_list_free(&st.body_spans);
 		free(st.diags.items);
+		free(st.idx_comps.items);
+		free(st.idx_cparams.items);
+		free(st.idx_elems.items);
+		free(st.idx_attrs.items);
+		free(st.idx_closures.items);
+		free(st.idx_includes.items);
 		return -1;
 	}
 
@@ -1876,8 +2225,17 @@ int cx_transpile(const cx_options *opt, const char *src, size_t len, cx_result *
 
 	if (!st.out.data) {
 		st.out.data = cx_strndup("", 0);
-		if (!st.out.data)
+		if (!st.out.data) {
+			span_list_free(&st.out_spans);
+			free(st.diags.items);
+			free(st.idx_comps.items);
+			free(st.idx_cparams.items);
+			free(st.idx_elems.items);
+			free(st.idx_attrs.items);
+			free(st.idx_closures.items);
+			free(st.idx_includes.items);
 			return -1;
+		}
 	}
 
 	out->c_code = st.out.data;
@@ -1887,6 +2245,19 @@ int cx_transpile(const cx_options *opt, const char *src, size_t len, cx_result *
 	out->diags = st.diags.items;
 	out->diag_count = st.diags.count;
 	out->ok = (st.diags.count == 0) ? 1 : 0;
+
+	out->comps = st.idx_comps.items;
+	out->comp_count = st.idx_comps.count;
+	out->comp_params = st.idx_cparams.items;
+	out->comp_param_count = st.idx_cparams.count;
+	out->elems = st.idx_elems.items;
+	out->elem_count = st.idx_elems.count;
+	out->attrs = st.idx_attrs.items;
+	out->attr_count = st.idx_attrs.count;
+	out->closures = st.idx_closures.items;
+	out->closure_count = st.idx_closures.count;
+	out->includes = st.idx_includes.items;
+	out->include_count = st.idx_includes.count;
 	return 0;
 }
 
@@ -1897,6 +2268,12 @@ void cx_result_free(cx_result *res)
 	free(res->c_code);
 	free(res->spans);
 	free(res->diags);
+	free(res->comps);
+	free(res->comp_params);
+	free(res->elems);
+	free(res->attrs);
+	free(res->closures);
+	free(res->includes);
 	memset(res, 0, sizeof(*res));
 }
 
@@ -1918,6 +2295,55 @@ int cx_write_map_json(const cx_result *res, const char *path)
 		        (unsigned)s->kind);
 	}
 	fprintf(fp, "]}\n");
+	fclose(fp);
+	return 0;
+}
+
+int cx_write_header(const cx_result *res, const char *src, const char *path)
+{
+	if (!res || !src || !path)
+		return -1;
+	FILE *fp = fopen(path, "wb");
+	if (!fp)
+		return -1;
+
+	fprintf(fp, "/* Generated by cx --emit-header */\n");
+	fprintf(fp, "#pragma once\n\n");
+	fprintf(fp, "#include <bud/bud_reconcile.h>\n\n");
+
+	for (size_t i = 0; i < res->comp_count; i++) {
+		const cx_comp_meta *c = &res->comps[i];
+		if (c->is_static || c->name.len == 0)
+			continue;
+		/* Deduplicate forward decl + definition of the same component */
+		int seen = 0;
+		for (size_t j = 0; j < i; j++) {
+			const cx_comp_meta *prev = &res->comps[j];
+			if (!prev->is_static && prev->name.len == c->name.len &&
+			    memcmp(src + prev->name.off, src + c->name.off, c->name.len) == 0)
+			{
+				seen = 1;
+				break;
+			}
+		}
+		if (seen)
+			continue;
+
+		fprintf(fp, "typedef struct %.*s_props {\n",
+		        (int)c->name.len, src + c->name.off);
+		if (c->param_count == 0) {
+			fprintf(fp, "\tint _cx_empty;\n");
+		} else {
+			for (uint32_t p = 0; p < c->param_count; p++) {
+				const cx_comp_param_meta *pm = &res->comp_params[c->param_start + p];
+				fprintf(fp, "\t%.*s;\n", (int)pm->decl.len, src + pm->decl.off);
+			}
+		}
+		fprintf(fp, "} %.*s_props;\n", (int)c->name.len, src + c->name.off);
+		fprintf(fp, "bud_node *%.*s_render(void *__cx_ctx, const void *__cx_raw_props);\n\n",
+		        (int)c->name.len, src + c->name.off);
+	}
+
 	fclose(fp);
 	return 0;
 }
