@@ -1,0 +1,16 @@
+{
+  "name": "bud-jsx-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "entry": "src/index.tsx",
+  "template": "public/index.html",
+  "browser": "dist/index.js",
+  "scripts": {
+    "build": "scripts build"
+  },
+  "dependencies": {
+    "@tty-pt/bud": "file:../..",
+    "@tty-pt/scripts": "^0.8.0"
+  }
+}

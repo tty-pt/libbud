@@ -1,5 +1,8 @@
 import { loadWasmModule, loadNativeAddon, getSubstrate } from "@tty-pt/stele";
 
+import { BudNode, h } from "./node.js";
+export { BudNode, h };
+
 const nativeBinding = loadNativeAddon(import.meta.url, "bud");
 let wasmInstance = null;
 let collectedPatches = [];
@@ -22,47 +25,10 @@ export function getBudWasm() {
   return wasmInstance;
 }
 
-export class BudNode {
-  constructor(tag, attrs = {}, children = []) {
-    this.tag = tag;
-    this.attrs = attrs;
-    this.children = children;
-    this.text = "";
-  }
 
-  attr(key, val) {
-    this.attrs[key] = val;
-    return this;
-  }
-
-  child(node) {
-    this.children.push(node);
-    return this;
-  }
-
-  setText(text) {
-    this.text = text;
-    return this;
-  }
-
-  render() {
-    const attrStr = Object.entries(this.attrs)
-      .map(([k, v]) => ` ${k}="${v}"`)
-      .join("");
-    const childStr = this.children.map((c) => (typeof c === "string" ? c : c.render())).join("");
-    return `<${this.tag}${attrStr}>${this.text}${childStr}</${this.tag}>`;
-  }
-}
-
-/**
- * Creates virtual DOM node (mirrors bud_node_create)
- */
-export function h(tag, attrs = {}, children = []) {
-  return new BudNode(tag, attrs, children);
-}
 
 function buildWasmTree(wasm, node) {
-  if (!node) return 0;
+  if (node == null || typeof node === "boolean") return 0;
   const { malloc, free, bud_element, bud_text, bud_set_attr, bud_append } = wasm.exports;
   const enc = new TextEncoder();
 
@@ -73,24 +39,44 @@ function buildWasmTree(wasm, node) {
     return ptr;
   }
 
-  if (typeof node === "string") {
-    const sPtr = allocStr(node);
+  if (typeof node === "string" || typeof node === "number") {
+    const sPtr = allocStr(String(node));
     const t = bud_text(sPtr);
     free(sPtr);
     return t;
   }
 
-  const tagPtr = allocStr(node.tag || "div");
+  if (typeof node.tag === "function") {
+    return buildWasmTree(wasm, node.resolve());
+  }
+
+  const tagPtr = allocStr(node.isFragment ? "div" : (node.tag || "div"));
   const cNode = bud_element(tagPtr);
   free(tagPtr);
 
+  function setAttr(k, v) {
+    const kPtr = allocStr(k);
+    const vPtr = allocStr(String(v));
+    bud_set_attr(cNode, kPtr, vPtr);
+    free(kPtr);
+    free(vPtr);
+  }
+
+  if (node.props) {
+    for (const k in node.props) {
+      if (k === "children" || k === "key" || k === "ref" || k === "dangerouslySetInnerHTML") continue;
+      const v = node.props[k];
+      if (v == null || v === false) continue;
+      if (k.charCodeAt(0) === 111 && k.charCodeAt(1) === 110 && typeof v === "function") continue;
+      const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;
+      setAttr(name, v === true ? "" : v);
+    }
+  }
+
   if (node.attrs) {
     for (const [k, v] of Object.entries(node.attrs)) {
-      const kPtr = allocStr(k);
-      const vPtr = allocStr(String(v));
-      bud_set_attr(cNode, kPtr, vPtr);
-      free(kPtr);
-      free(vPtr);
+      if (v == null || v === false) continue;
+      setAttr(k, v === true ? "" : v);
     }
   }
 
@@ -101,10 +87,26 @@ function buildWasmTree(wasm, node) {
     free(tPtr);
   }
 
+  function appendChild(ch) {
+    if (ch == null || typeof ch === "boolean") return;
+    if (typeof ch === "object" && typeof ch.tag === "function") {
+      appendChild(ch.resolve());
+      return;
+    }
+    if (typeof ch === "object" && ch.isFragment) {
+      if (ch.text) appendChild(ch.text);
+      if (Array.isArray(ch.children)) {
+        for (let i = 0; i < ch.children.length; i++) appendChild(ch.children[i]);
+      }
+      return;
+    }
+    const chNode = buildWasmTree(wasm, ch);
+    if (chNode) bud_append(cNode, chNode);
+  }
+
   if (Array.isArray(node.children)) {
-    for (const ch of node.children) {
-      const chNode = buildWasmTree(wasm, ch);
-      if (chNode) bud_append(cNode, chNode);
+    for (let i = 0; i < node.children.length; i++) {
+      appendChild(node.children[i]);
     }
   }
 

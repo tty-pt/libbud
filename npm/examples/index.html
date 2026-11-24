@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bud Native JSX In-Browser Demo</title>
+  <!-- Load in-browser Babel compiler so we can run literal <Tag> JSX syntax in the browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #131826;
+      --card-border: #232b3e;
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 2.5rem 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 960px;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 768px) {
+      .container { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 0.75rem;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-live {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid var(--success);
+    }
+    .badge-offline {
+      background: rgba(139, 148, 158, 0.1);
+      color: var(--text-muted);
+      border: 1px solid var(--card-border);
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .song-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+    .song-card {
+      padding: 0.85rem 1.1rem;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .song-card:hover {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    .song-card.playing {
+      background: var(--accent-glow);
+      border-color: var(--accent);
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+    .song-title {
+      display: block;
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+    .song-card.playing .song-title {
+      color: var(--accent);
+    }
+    .song-artist {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .song-duration {
+      font-family: ui-monospace, monospace;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .controls {
+      display: flex;
+      gap: 0.5rem;
+    }
+    button {
+      background: #1e2638;
+      color: var(--text);
+      border: 1px solid var(--card-border);
+      padding: 0.5rem 0.9rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    button:hover {
+      background: #28334b;
+      border-color: var(--accent);
+    }
+    pre {
+      background: #080b12;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 0.85rem;
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      overflow-x: auto;
+      max-height: 280px;
+    }
+    .code-preview {
+      max-height: 160px;
+      color: #93c5fd;
+    }
+    .meta-tag {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- UI Mount Target -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2 style="font-size: 1.15rem; font-weight: 600;">Bud JSX Component</h2>
+        <span id="patch-badge" class="badge badge-offline">0 patches</span>
+      </div>
+
+      <div class="controls">
+        <button id="btn-toggle">Toggle Status</button>
+        <button id="btn-add">+ Add Track</button>
+      </div>
+
+      <!-- Live Bud UI renders here -->
+      <div id="bud-mount"></div>
+    </div>
+
+    <!-- Telemetry & Diff Stream -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2 style="font-size: 1.15rem; font-weight: 600;">C Libbud VDOM Engine</h2>
+        <span class="meta-tag">WASM Reconciler</span>
+      </div>
+
+      <div>
+        <p class="meta-tag" style="margin-bottom: 0.4rem;">Component Written in Literal JSX Syntax:</p>
+        <pre class="code-preview"><code>function SongCard({ song, isPlaying }) {
+  return (
+    &lt;div className={isPlaying ? "song-card playing" : "song-card"}&gt;
+      &lt;div&gt;
+        &lt;span className="song-title"&gt;{song.title}&lt;/span&gt;
+        &lt;span className="song-artist"&gt;{song.artist}&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;span className="song-duration"&gt;{song.duration}&lt;/span&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+      </div>
+
+      <div>
+        <p class="meta-tag" style="margin-bottom: 0.4rem;">C WASM Reconciler Patches:</p>
+        <pre id="patches-log">// Loading WASM engine...</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Real JSX / TSX script compiled in the browser via Babel into @tty-pt/bud JSX runtime -->
+  <script type="text/babel" data-type="module">
+    import { jsx, jsxs, Fragment } from "../jsx-runtime/index.js";
+    import { BudNode } from "../dist/node.js";
+
+    // --- WASM Linear Memory & Bump Substrate ---
+    const memory = new WebAssembly.Memory({ initial: 64, maximum: 256 });
+    let allocOffset = 65536;
+
+    function wasmMalloc(size) {
+      const aligned = (size + 7) & ~7;
+      const ptr = allocOffset;
+      allocOffset += aligned;
+      if (allocOffset > memory.buffer.byteLength) {
+        const pagesNeeded = Math.ceil((allocOffset - memory.buffer.byteLength) / 65536);
+        memory.grow(pagesNeeded);
+      }
+      return ptr;
+    }
+
+    let wasmInstance = null;
+    let collectedPatches = [];
+
+    async function initWasm() {
+      const response = await fetch("../dist/bud.wasm");
+      const bytes = await response.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {
+        env: {
+          memory: memory,
+          malloc: wasmMalloc,
+          free: () => {},
+          calloc: (n, s) => {
+            const ptr = wasmMalloc(n * s);
+            new Uint8Array(memory.buffer, ptr, n * s).fill(0);
+            return ptr;
+          },
+          realloc: (ptr, s) => wasmMalloc(s),
+          bud_host_emit_patch: (opPtr, opLen, aPtr, aLen, bPtr, bLen, cPtr, cLen) => {
+            const dec = new TextDecoder();
+            const op = dec.decode(new Uint8Array(memory.buffer, opPtr, opLen));
+            const a = dec.decode(new Uint8Array(memory.buffer, aPtr, aLen));
+            const b = dec.decode(new Uint8Array(memory.buffer, bPtr, bLen));
+            const c = dec.decode(new Uint8Array(memory.buffer, cPtr, cLen));
+            collectedPatches.push({ type: op, a, b, c });
+          }
+        },
+        wasi_snapshot_preview1: {
+          fd_close: () => 0,
+          fd_seek: () => 0,
+          fd_write: () => 0
+        }
+      });
+      if (instance.exports._initialize) instance.exports._initialize();
+      wasmInstance = instance;
+    }
+
+    function buildWasmTree(wasm, node) {
+      if (!node) return 0;
+      const { bud_element, bud_text, bud_set_attr, bud_append } = wasm.exports;
+      const enc = new TextEncoder();
+
+      function allocStr(s) {
+        const bytes = enc.encode(s);
+        const ptr = wasmMalloc(bytes.length + 1);
+        new Uint8Array(memory.buffer, ptr, bytes.length + 1).set([...bytes, 0]);
+        return ptr;
+      }
+
+      if (typeof node === "string") {
+        return bud_text(allocStr(node));
+      }
+
+      const cNode = bud_element(allocStr(node.tag || "div"));
+      if (node.attrs) {
+        for (const [k, v] of Object.entries(node.attrs)) {
+          bud_set_attr(cNode, allocStr(k), allocStr(String(v)));
+        }
+      }
+      if (node.text) {
+        bud_append(cNode, bud_text(allocStr(node.text)));
+      }
+      if (Array.isArray(node.children)) {
+        for (const ch of node.children) {
+          const chNode = buildWasmTree(wasm, ch);
+          if (chNode) bud_append(cNode, chNode);
+        }
+      }
+      return cNode;
+    }
+
+    function diffVdomBrowser(oldTree, newTree) {
+      if (!wasmInstance) return [];
+      collectedPatches = [];
+      const saved = allocOffset;
+      const oldC = buildWasmTree(wasmInstance, oldTree);
+      const newC = buildWasmTree(wasmInstance, newTree);
+      try {
+        wasmInstance.exports.bud_wasm_diff(oldC, newC);
+      } finally {
+        if (oldC) wasmInstance.exports.bud_free(oldC);
+        if (newC) wasmInstance.exports.bud_free(newC);
+        allocOffset = saved;
+      }
+      const res = collectedPatches;
+      collectedPatches = [];
+      return res;
+    }
+
+    // =========================================================================
+    //  ACTUAL JSX / TSX SYNTAX (Transpiled by Babel directly to @tty-pt/bud)
+    // =========================================================================
+
+    function StatusBadge({ status }) {
+      const isOnline = status === "online";
+      return (
+        <span className={isOnline ? "badge badge-live" : "badge badge-offline"}>
+          <span className="badge-dot" />
+          {isOnline ? "Live Server" : "Disconnected"}
+        </span>
+      );
+    }
+
+    function SongCard({ song, isPlaying, onSelect }) {
+      return (
+        <div
+          className={isPlaying ? "song-card playing" : "song-card"}
+          data-id={song.id}
+          onClick={() => onSelect(song.id)}
+        >
+          <div>
+            <span className="song-title">{song.title}</span>
+            <span className="song-artist">{song.artist}</span>
+          </div>
+          <span className="song-duration">{song.duration}</span>
+        </div>
+      );
+    }
+
+    function MusicApp({ state, onSelectSong }) {
+      return (
+        <div className="music-app">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+            <div>
+              <h3 style={{ fontSize: "1.1rem" }}>{state.playlistName}</h3>
+              <p style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>{state.songs.length} tracks loaded</p>
+            </div>
+            <StatusBadge status={state.status} />
+          </div>
+
+          <div className="song-list">
+            {state.songs.map((song) => (
+              <SongCard
+                key={song.id}
+                song={song}
+                isPlaying={song.id === state.currentPlayingId}
+                onSelect={onSelectSong}
+              />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // --- State and Mount Handling ---
+    let appState = {
+      playlistName: "David Bowie Classics",
+      status: "online",
+      currentPlayingId: 1,
+      songs: [
+        { id: 1, title: "Space Oddity", artist: "David Bowie", duration: "5:15" },
+        { id: 2, title: "Heroes", artist: "David Bowie", duration: "6:07" },
+        { id: 3, title: "Starman", artist: "David Bowie", duration: "4:14" },
+        { id: 4, title: "Life on Mars?", artist: "David Bowie", duration: "3:48" }
+      ]
+    };
+
+    let currentVdom = null;
+    const mountEl = document.getElementById("bud-mount");
+    const patchesLog = document.getElementById("patches-log");
+    const patchBadge = document.getElementById("patch-badge");
+
+    function renderApp() {
+      // Literal JSX call:
+      const nextVdom = (
+        <MusicApp
+          state={appState}
+          onSelectSong={(id) => updateState({ currentPlayingId: id })}
+        />
+      );
+
+      if (!currentVdom) {
+        mountEl.innerHTML = nextVdom.render();
+        currentVdom = nextVdom;
+        patchesLog.textContent = "// Initial mount: <MusicApp /> -> BudNode -> HTML rendered";
+        return;
+      }
+
+      const patches = diffVdomBrowser(currentVdom, nextVdom);
+      patchBadge.textContent = `${patches.length} patch(es)`;
+      patchesLog.textContent = JSON.stringify(patches, null, 2);
+
+      mountEl.innerHTML = nextVdom.render();
+      currentVdom = nextVdom;
+    }
+
+    function updateState(partial) {
+      appState = { ...appState, ...partial };
+      renderApp();
+    }
+
+    document.getElementById("btn-toggle").onclick = () => {
+      updateState({ status: appState.status === "online" ? "offline" : "online" });
+    };
+
+    const extraSongs = [
+      { title: "Changes", artist: "David Bowie", duration: "3:37" },
+      { title: "Rebel Rebel", artist: "David Bowie", duration: "4:30" },
+      { title: "Moonage Daydream", artist: "David Bowie", duration: "4:40" },
+      { title: "Modern Love", artist: "David Bowie", duration: "4:46" }
+    ];
+    let nextId = 5;
+
+    document.getElementById("btn-add").onclick = () => {
+      const template = extraSongs[Math.floor(Math.random() * extraSongs.length)];
+      updateState({ songs: [...appState.songs, { id: nextId++, ...template }] });
+    };
+
+    // Global click delegate for cards
+    mountEl.addEventListener("click", (e) => {
+      const card = e.target.closest(".song-card");
+      if (card && card.dataset.id) {
+        updateState({ currentPlayingId: parseInt(card.dataset.id, 10) });
+      }
+    });
+
+    await initWasm();
+    renderApp();
+  </script>
+</body>
+</html>

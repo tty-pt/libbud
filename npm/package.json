@@ -12,10 +12,15 @@
     },
     "./cap": {
       "default": "./dist/bud-cap.js"
+    },
+    "./jsx-runtime": {
+      "types": "./jsx-runtime/index.d.ts",
+      "default": "./jsx-runtime/index.js"
     }
   },
   "files": [
     "dist",
+    "jsx-runtime",
     "include",
     "assets",
     "*.pc",
@@ -26,7 +31,9 @@
     "build:native": "mkdir -p build/Release && gcc -O3 -fPIC -shared -I/usr/include/node -I../include native/bud_napi.c -L../lib -Wl,-rpath,../lib -L/usr/lib -lbud -o build/Release/bud_node.node 2>/dev/null || true",
     "build:wasm": "make -C .. wasm",
     "build": "npm run build:native && npm run build:wasm",
-    "test": "node --test tests/bud.test.mjs"
+    "test": "node --test tests/bud.test.mjs tests/jsx-runtime.test.mjs tests/hooks.test.mjs tests/events.test.mjs tests/reconciler.test.mjs",
+    "bench": "NODE_ENV=production node tests/bench-vs-react.mjs",
+    "bench:browser": "node tests/bench-browser.mjs"
   },
   "peerDependencies": {
     "@tty-pt/stele": ">=1.7.0"
