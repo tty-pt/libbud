@@ -969,9 +969,9 @@ static void parse_and_lift_closure(
 		}
 	}
 
-	/* Emit bud_bind_ctx at the call site */
+	/* Emit bud_bind_ctx_lit at the call site */
 	if (cap_count > 0) {
-		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, __cx_fn_%u, &(__cx_cap_%u){ ",
+		buf_printf(dst, "\tbud_bind_ctx_lit(%s, \"%s\", %d, __cx_fn_%u, &(__cx_cap_%u){ ",
 		           el_var, ev_name, bubbles, cid, cid);
 		for (size_t i = 0; i < cap_count; i++) {
 			if (i > 0)
@@ -980,7 +980,7 @@ static void parse_and_lift_closure(
 		}
 		buf_printf(dst, " }, sizeof(__cx_cap_%u));\n", cid);
 	} else {
-		buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, __cx_fn_%u, NULL, 0);\n",
+		buf_printf(dst, "\tbud_bind_ctx_lit(%s, \"%s\", %d, __cx_fn_%u, NULL, 0);\n",
 		           el_var, ev_name, bubbles, cid);
 	}
 
@@ -1284,7 +1284,7 @@ static void parse_jsx_children(
 			cx_buf norm = { 0 };
 			normalize_jsx_text(st->src + tstart, st->pos - tstart, &norm);
 			if (norm.len > 0) {
-				buf_printf(dst, "\tbud_append_opt(%s, bud_text(", parent_var);
+				buf_printf(dst, "\tbud_append_opt(%s, bud_text_lit(", parent_var);
 				buf_escaped_cstr(dst, norm.data, norm.len);
 				buf_str(dst, "));\n");
 			}
@@ -1388,7 +1388,7 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 
 	/* For HTML elements, emit element creation immediately so closures & attrs stream cleanly */
 	if (!is_component) {
-		buf_printf(dst, "\tbud_node *%s = bud_element(", var);
+		buf_printf(dst, "\tbud_node *%s = bud_element_lit(", var);
 		uint32_t tag_c_off = (uint32_t)dst->len + 1;
 		buf_escaped_cstr(dst, tag, tag_len);
 		span_push(spans, tag_off, (uint32_t)tag_len,
@@ -1442,7 +1442,7 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 			if (peek_at(st, 0) != '=') {
 				/* Bare boolean attribute: `<button disabled>` */
 				uint32_t ac = (uint32_t)dst->len;
-				buf_printf(dst, "\tbud_set_attr(%s, ", var);
+				buf_printf(dst, "\tbud_set_attr_lit(%s, ", var);
 				buf_escaped_cstr(dst, aname, an_len);
 				buf_str(dst, ", \"\");\n");
 				span_push(spans, an_off, (uint32_t)an_len, ac, (uint32_t)an_len, CX_SPAN_ATTR);
@@ -1483,10 +1483,10 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 				am.full.len = (uint32_t)(st->pos - an_off);
 
 				if (is_key) {
-					buf_printf(dst, "\tbud_set_key(%s, \"%.*s\");\n",
+					buf_printf(dst, "\tbud_set_key_lit(%s, \"%.*s\");\n",
 					           var, (int)(ve - vs), st->src + vs);
 				} else {
-					buf_printf(dst, "\tbud_set_attr(%s, ", var);
+					buf_printf(dst, "\tbud_set_attr_lit(%s, ", var);
 					uint32_t ac = (uint32_t)dst->len + 1;
 					buf_escaped_cstr(dst, aname, an_len);
 					span_push(spans, an_off, (uint32_t)an_len, ac, (uint32_t)an_len, CX_SPAN_ATTR);
@@ -1552,7 +1552,7 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 						parse_and_lift_closure(st, dst, var, ev_lower, ev_bubbles);
 						skip_ws_and_comments(st);
 					} else {
-						buf_printf(dst, "\tbud_bind_ctx(%s, \"%s\", %d, (", var, ev_lower, ev_bubbles);
+						buf_printf(dst, "\tbud_bind_ctx_lit(%s, \"%s\", %d, (", var, ev_lower, ev_bubbles);
 						transpile_c_until(st, dst, spans, '}', 1, CX_SPAN_EXPR);
 						buf_str(dst, "), NULL, 0);\n");
 					}

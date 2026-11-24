@@ -100,6 +100,9 @@ struct bud_mount {
 	bud_cell **pending_effects;
 	size_t     effect_count;
 	size_t     effect_cap;
+
+	bud_arena *render_arena;
+	int        render_depth;
 };
 
 /* ── Active hook rendering context (single-threaded / WASM-safe) ──────── */
@@ -1253,19 +1256,33 @@ bud_mount *bud_mount_new(
 	}
 	m->root_cell->kind = BUD_NODE_ELEMENT;
 	m->root_cell->host_node = root_host;
+	m->render_arena = bud_arena_new(0);
 	return m;
 }
 
 int bud_mount_update(bud_mount *mount, const bud_node *root_vnode)
 {
+	bud_arena *prev_arena;
+
 	if (!mount || !mount->root_cell)
 		return -1;
+
+	prev_arena = mount->render_arena ? bud_arena_push(mount->render_arena)
+	                                 : bud_arena_current();
+	mount->render_depth++;
 
 	if (root_vnode) {
 		const bud_node *arr[1] = { root_vnode };
 		patch_children(mount, mount->root_cell, arr, 1);
 	} else {
 		patch_children(mount, mount->root_cell, NULL, 0);
+	}
+
+	mount->render_depth--;
+	if (mount->render_arena) {
+		bud_arena_pop(prev_arena);
+		if (mount->render_depth == 0)
+			bud_arena_reset(mount->render_arena);
 	}
 
 	mount_run_effects(mount);
@@ -1281,6 +1298,7 @@ int bud_mount_flush(bud_mount *mount)
 		return -1;
 
 	for (round = 0; round < 32 && mount->dirty_count > 0; round++) {
+		bud_arena *prev_arena;
 		bud_cell **batch = mount->dirty;
 		size_t count = mount->dirty_count;
 		mount->dirty = NULL;
@@ -1298,6 +1316,11 @@ int bud_mount_flush(bud_mount *mount)
 			batch[j] = key;
 		}
 
+		prev_arena = mount->render_arena
+		                     ? bud_arena_push(mount->render_arena)
+		                     : bud_arena_current();
+		mount->render_depth++;
+
 		for (size_t i = 0; i < count; i++) {
 			bud_cell *c = batch[i];
 			if (!(c->flags & BUD_CELL_MOUNTED))
@@ -1310,6 +1333,13 @@ int bud_mount_flush(bud_mount *mount)
 			} else {
 				c->flags &= (uint8_t)~BUD_CELL_DIRTY;
 			}
+		}
+
+		mount->render_depth--;
+		if (mount->render_arena) {
+			bud_arena_pop(prev_arena);
+			if (mount->render_depth == 0)
+				bud_arena_reset(mount->render_arena);
 		}
 
 		free(batch);
@@ -1355,6 +1385,8 @@ void bud_mount_free(bud_mount *mount)
 		cell_unmount(mount, mount->root_cell, 0);
 		mount->root_cell = NULL;
 	}
+	bud_arena_free(mount->render_arena);
+	mount->render_arena = NULL;
 	free(mount);
 }
 

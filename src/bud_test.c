@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "../include/bud/bud_jsx.h"
 #include "../include/bud/bud.h"
 #include "../include/bud/bud_slot.h"
@@ -7,6 +8,49 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
+#if defined(__has_feature)
+#if !__has_feature(address_sanitizer)
+#define BUD_TEST_COUNT_ALLOCS 1
+#endif
+#else
+#define BUD_TEST_COUNT_ALLOCS 1
+#endif
+#endif
+
+#ifdef BUD_TEST_COUNT_ALLOCS
+extern void *__libc_malloc(size_t size);
+extern void *__libc_calloc(size_t nmemb, size_t size);
+extern void *__libc_realloc(void *ptr, size_t size);
+extern void __libc_free(void *ptr);
+
+static unsigned long g_bud_test_allocs = 0;
+
+void *malloc(size_t size)
+{
+	g_bud_test_allocs++;
+	return __libc_malloc(size);
+}
+
+void *calloc(size_t nmemb, size_t size)
+{
+	g_bud_test_allocs++;
+	return __libc_calloc(nmemb, size);
+}
+
+void *realloc(void *ptr, size_t size)
+{
+	g_bud_test_allocs++;
+	return __libc_realloc(ptr, size);
+}
+
+void free(void *ptr)
+{
+	__libc_free(ptr);
+}
+#endif
 
 typedef struct test_ops {
 	char buffer[1024];
@@ -593,6 +637,427 @@ static int test_window_event_type(void)
 	return rc;
 }
 
+static void arena_test_unmount_cb(
+        void *user, bud_runtime *runtime, const bud_node *node)
+{
+	int *count = (int *)user;
+	(void)runtime;
+	(void)node;
+	if (count)
+		(*count)++;
+}
+
+static int arena_test_click_cb(bud_event *event)
+{
+	int **count_ptr = (int **)event->user;
+	if (count_ptr && *count_ptr)
+		(**count_ptr)++;
+	return 0;
+}
+
+static bud_node *bench_build_tree_heap(int frame)
+{
+	bud_node *root = bud_element("section");
+	bud_node *hdr = bud_element("header");
+	bud_node *h1 = bud_element("h1");
+	bud_node *ul = bud_element("ul");
+	char kbuf[32];
+
+	bud_set_attr(root, "class", "hud-panel");
+	bud_set_attr(root, "data-view", "inventory");
+	bud_set_attr(hdr, "class", "hud-header");
+	bud_append(h1, bud_text("Inventory"));
+	bud_append(hdr, h1);
+	bud_append(hdr, bud_textf("Frame %d", frame));
+	bud_append(root, hdr);
+	bud_set_attr(ul, "class", "hud-list");
+	for (int i = 0; i < 25; i++) {
+		bud_node *li = bud_element("li");
+		bud_node *badge = bud_element("span");
+		bud_node *label = bud_element("strong");
+
+		snprintf(kbuf, sizeof(kbuf), "row-%d", i);
+		bud_set_key(li, kbuf);
+		bud_set_attr(li, "class", (i == (frame % 25)) ? "row active" : "row");
+		bud_set_attr(badge, "class", "badge");
+		bud_append(badge, bud_text("ITEM"));
+		bud_append(label, bud_textf("Slot %d (#%d)", i, frame + i));
+		bud_append(li, badge);
+		bud_append(li, label);
+		bud_append(ul, li);
+	}
+	bud_append(root, ul);
+	return root;
+}
+
+static bud_node *bench_build_tree_lit(int frame)
+{
+	bud_node *root = bud_element_lit("section");
+	bud_node *hdr = bud_element_lit("header");
+	bud_node *h1 = bud_element_lit("h1");
+	bud_node *ul = bud_element_lit("ul");
+	char kbuf[32];
+
+	bud_set_attr_lit(root, "class", "hud-panel");
+	bud_set_attr_lit(root, "data-view", "inventory");
+	bud_set_attr_lit(hdr, "class", "hud-header");
+	bud_append(h1, bud_text_lit("Inventory"));
+	bud_append(hdr, h1);
+	bud_append(hdr, bud_textf("Frame %d", frame));
+	bud_append(root, hdr);
+	bud_set_attr_lit(ul, "class", "hud-list");
+	for (int i = 0; i < 25; i++) {
+		bud_node *li = bud_element_lit("li");
+		bud_node *badge = bud_element_lit("span");
+		bud_node *label = bud_element_lit("strong");
+
+		snprintf(kbuf, sizeof(kbuf), "row-%d", i);
+		bud_set_key(li, kbuf);
+		bud_set_attr_lit(li, "class", (i == (frame % 25)) ? "row active" : "row");
+		bud_set_attr_lit(badge, "class", "badge");
+		bud_append(badge, bud_text_lit("ITEM"));
+		bud_append(label, bud_textf("Slot %d (#%d)", i, frame + i));
+		bud_append(li, badge);
+		bud_append(li, label);
+		bud_append(ul, li);
+	}
+	bud_append(root, ul);
+	return root;
+}
+
+static double monotonic_us(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec * 1e-3;
+}
+
+static int test_bud_arena_and_lit(void)
+{
+	int rc = 0;
+
+	/* 1. Basic arena push/pop/current/bytes_used + *_lit + unmount hook */
+	{
+		bud_arena *a = bud_arena_new(256);
+		bud_arena *prev;
+		bud_node *div;
+		bud_node *btn;
+		char *html;
+		int unmounted = 0;
+		int clicked = 0;
+		int *clicked_ptr = &clicked;
+
+		rc = check(a != NULL && bud_arena_current() == NULL &&
+		           bud_arena_bytes_used(a) == 0,
+		           "arena initial state");
+		if (rc != 0) {
+			bud_arena_free(a);
+			return rc;
+		}
+		prev = bud_arena_push(a);
+		rc = check(prev == NULL && bud_arena_current() == a,
+		           "arena push sets current");
+		if (rc != 0) {
+			bud_arena_pop(prev);
+			bud_arena_free(a);
+			return rc;
+		}
+
+		div = bud_element_lit("div");
+		bud_set_key_lit(div, "k-root");
+		bud_set_attr_lit(div, "class", "box");
+		bud_set_attr_name_lit(div, "data-dyn", "hello");
+		bud_set_bool_attr_lit(div, "hidden");
+		bud_set_lifecycle(div, NULL, NULL, arena_test_unmount_cb, &unmounted);
+
+		btn = bud_element_lit("button");
+		bud_bind_ctx_lit(btn, "click", 1, arena_test_click_cb,
+		                 &clicked_ptr, sizeof(clicked_ptr));
+		bud_append(btn, bud_text_lit("Go"));
+		bud_append(div, btn);
+
+		bud_arena_pop(prev);
+		rc = check(bud_arena_current() == NULL &&
+		           bud_arena_bytes_used(a) > 0,
+		           "arena pop restores NULL and records bytes_used");
+
+		if (rc == 0)
+			rc = check(strcmp(bud_get_key(div), "k-root") == 0 &&
+			           bud_node_listener_count(btn) == 1 &&
+			           strcmp(bud_node_listener_event(btn, 0), "click") == 0,
+			           "lit key and listener");
+
+		html = bud_render_html(div);
+		if (rc == 0)
+			rc = check(html != NULL &&
+			           strstr(html, "data-bud-key=\"k-root\"") != NULL &&
+			           strstr(html, "class=\"box\"") != NULL &&
+			           strstr(html, "data-dyn=\"hello\"") != NULL &&
+			           strstr(html, "hidden") != NULL &&
+			           strstr(html, "<button>Go</button>") != NULL,
+			           "arena + lit HTML output");
+		bud_free_string(html);
+
+		/* Mount in bud_runtime to verify bud_bind_ctx_lit dispatch + on_unmount */
+		{
+			bud_runtime *rt = bud_runtime_new(div);
+			if (rc == 0)
+				rc = check(rt != NULL && bud_runtime_mount(rt) == 0,
+				           "arena tree mounts in bud_runtime");
+			if (rc == 0)
+				rc = check(bud_runtime_dispatch(rt, btn, "click", NULL) == 0 &&
+				           clicked == 1,
+				           "bud_bind_ctx_lit dispatches click event");
+			bud_runtime_free(rt);
+		}
+		if (rc == 0)
+			rc = check(unmounted == 1,
+			           "unmount on arena tree invokes on_unmount");
+
+		/* Calling bud_free on an arena tree must be safe (no crash/double-free) */
+		bud_free(div);
+
+		bud_arena_reset(a);
+		if (rc == 0)
+			rc = check(bud_arena_bytes_used(a) == 0,
+			           "bud_arena_reset zeroes bytes_used");
+		bud_arena_free(a);
+		if (rc != 0)
+			return rc;
+	}
+
+	/* 2. Slab growth across multiple doublings + oversized slab (>64KB) + warm reset reuse */
+	{
+		bud_arena *a = bud_arena_new(256);
+		bud_arena *prev = bud_arena_push(a);
+		bud_node *ul = bud_element_lit("ul");
+		char *big = (char *)malloc(70001);
+		bud_node *big_t;
+
+		memset(big, 'A', 70000);
+		big[70000] = '\0';
+		for (int i = 0; i < 120; i++) {
+			bud_node *li = bud_element_lit("li");
+			bud_set_attr_name_lit(li, "class", "row");
+			bud_append(li, bud_textf("item-%d", i));
+			bud_append(ul, li);
+		}
+		big_t = bud_text(big);
+		bud_append(ul, big_t);
+		bud_arena_pop(prev);
+
+		rc = check(bud_arena_bytes_used(a) > 70000 &&
+		           bud_node_child_count(ul) == 121 &&
+		           strlen(bud_node_text(big_t)) == 70000,
+		           "arena slab growth and oversized allocation");
+		free(big);
+
+		/* Reset frees oversized slab and retains warm normal slabs */
+		bud_arena_reset(a);
+		if (rc == 0)
+			rc = check(bud_arena_bytes_used(a) == 0,
+			           "arena reset after oversized slab");
+
+		/* Rebuild 100 items on warm slabs: verify zero heap allocs */
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long before_allocs = g_bud_test_allocs;
+#endif
+		prev = bud_arena_push(a);
+		bud_node *ul2 = bud_element_lit("ul");
+		for (int i = 0; i < 100; i++) {
+			bud_node *li = bud_element_lit("li");
+			bud_set_attr_lit(li, "class", "row");
+			bud_append(li, bud_textf("warm-%d", i));
+			bud_append(ul2, li);
+		}
+		bud_arena_pop(prev);
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long warm_allocs = g_bud_test_allocs - before_allocs;
+		if (rc == 0)
+			rc = check(warm_allocs == 0,
+			           "warm arena rebuild performs 0 heap allocations");
+#endif
+		if (rc == 0)
+			rc = check(bud_node_child_count(ul2) == 100,
+			           "warm arena rebuilt 100 children");
+		bud_arena_free(a);
+		if (rc != 0)
+			return rc;
+	}
+
+	/* 3. Nested arenas + NULL heap escape + mixed arena/heap tree teardown */
+	{
+		bud_arena *a1 = bud_arena_new(1024);
+		bud_arena *a2 = bud_arena_new(1024);
+		bud_arena *p0 = bud_arena_push(a1);
+		bud_node *root = bud_element_lit("div");
+
+		/* Escape to heap inside a1 */
+		bud_arena *p1 = bud_arena_push(NULL);
+		bud_node *heap_child = bud_element("span");
+		bud_set_attr(heap_child, "class", "heap");
+		bud_append(heap_child, bud_text("Heap"));
+		bud_arena_pop(p1);
+		bud_append(root, heap_child);
+
+		/* Nested arena a2 inside a1 */
+		bud_arena *p2 = bud_arena_push(a2);
+		bud_node *a2_child = bud_element_lit("em");
+		bud_set_attr_lit(a2_child, "data-a", "2");
+		bud_append(a2_child, bud_text_lit("Nested"));
+		bud_arena_pop(p2);
+		bud_append(root, a2_child);
+
+		rc = check(bud_arena_current() == a1,
+		           "nested arena pops restore outer arena");
+		bud_arena_pop(p0);
+
+		char *html = bud_render_html(root);
+		if (rc == 0)
+			rc = check(html != NULL &&
+			           strcmp(html, "<div><span class=\"heap\">Heap</span>"
+			                        "<em data-a=\"2\">Nested</em></div>") == 0,
+			           "mixed arena+heap tree renders accurately");
+		bud_free_string(html);
+
+		/* bud_free frees heap_child and safely skips a1/a2 slabs */
+		bud_free(root);
+		bud_arena_free(a2);
+		bud_arena_free(a1);
+		if (rc != 0)
+			return rc;
+	}
+
+	/* 4. Attribute/class/text/raw mutations across lit, heap, and arena + diff + expand */
+	{
+		/* Heap node mixing lit & owned attrs */
+		bud_node *h = bud_element_lit("div");
+		bud_set_attr_lit(h, "class", "a");
+		bud_set_attr(h, "class", "b");
+		bud_set_attr_lit(h, "class", "c");
+		bud_add_class(h, "d");
+		bud_remove_class(h, "c");
+		rc = check(strcmp(bud_get_attr(h, "class"), "d") == 0,
+		           "heap attr transitions lit->owned->lit->class");
+		bud_free(h);
+		if (rc != 0)
+			return rc;
+
+		/* Arena node mutations + bud_vdom_diff across two arenas + bud_expand_tree */
+		bud_arena *a_old = bud_arena_new(2048);
+		bud_arena *a_new = bud_arena_new(2048);
+		test_leaf_props p1 = { .label = "One" };
+		test_leaf_props p2 = { .label = "Two" };
+
+		bud_arena *p = bud_arena_push(a_old);
+		bud_node *t1 = bud_expand_tree(
+		        bud_component_vnode(test_comp_wrap, NULL, &p1, sizeof(p1)));
+		bud_node *raw = bud_raw("<b>1</b>");
+		bud_raw_set_text(raw, "<b>1b</b>");
+		bud_append(t1, raw);
+		bud_arena_pop(p);
+
+		p = bud_arena_push(a_new);
+		bud_node *t2 = bud_expand_tree(
+		        bud_component_vnode(test_comp_wrap, NULL, &p2, sizeof(p2)));
+		bud_node *raw2 = bud_raw("<b>2</b>");
+		bud_append(t2, raw2);
+		bud_arena_pop(p);
+
+		test_ops diff = { { 0 }, 0 };
+		rc = check(bud_vdom_diff(t1, t2, test_emit, &diff) == 0 &&
+		           strstr(diff.buffer, "patch-text:Two:") != NULL &&
+		           strstr(diff.buffer, "patch-innerhtml:") != NULL &&
+		           strstr(diff.buffer, "<b>2</b>") != NULL,
+		           "bud_vdom_diff across two arena-expanded trees");
+		bud_arena_free(a_old);
+		bud_arena_free(a_new);
+		if (rc != 0)
+			return rc;
+	}
+
+	/* 5. 1,000-render benchmark: heap vs warm-arena + *_lit */
+	{
+		const int ITERS = 1000;
+		bud_arena *arena = bud_arena_new(8192);
+		char *html_heap;
+		char *html_arena;
+
+		/* Parity check */
+		bud_node *n_heap = bench_build_tree_heap(0);
+		html_heap = bud_render_html(n_heap);
+		bud_free(n_heap);
+
+		bud_arena *p = bud_arena_push(arena);
+		bud_node *n_arena = bench_build_tree_lit(0);
+		html_arena = bud_render_html(n_arena);
+		bud_arena_pop(p);
+		bud_arena_reset(arena);
+
+		rc = check(html_heap != NULL && html_arena != NULL &&
+		           strcmp(html_heap, html_arena) == 0,
+		           "benchmark heap and arena+lit trees produce identical HTML");
+		bud_free_string(html_heap);
+		bud_free_string(html_arena);
+		if (rc != 0) {
+			bud_arena_free(arena);
+			return rc;
+		}
+
+		/* Measure heap path (1,000 frames) */
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long a0 = g_bud_test_allocs;
+#endif
+		double t0 = monotonic_us();
+		for (int i = 0; i < ITERS; i++) {
+			bud_node *n = bench_build_tree_heap(i);
+			bud_free(n);
+		}
+		double heap_us = monotonic_us() - t0;
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long heap_allocs = g_bud_test_allocs - a0;
+#endif
+
+		/* Measure warm arena + *_lit path (1,000 frames) */
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long a1 = g_bud_test_allocs;
+#endif
+		double t1 = monotonic_us();
+		for (int i = 0; i < ITERS; i++) {
+			bud_arena *prev = bud_arena_push(arena);
+			bud_node *n = bench_build_tree_lit(i);
+			(void)n;
+			bud_arena_pop(prev);
+			bud_arena_reset(arena);
+		}
+		double arena_us = monotonic_us() - t1;
+#ifdef BUD_TEST_COUNT_ALLOCS
+		unsigned long arena_allocs = g_bud_test_allocs - a1;
+		double reduction_pct = heap_allocs > 0
+		        ? (100.0 * (double)(heap_allocs - arena_allocs) / (double)heap_allocs)
+		        : 0.0;
+		printf("bud_arena bench (%d renders, ~105 nodes): "
+		       "heap=%.1f us/frame (%lu allocs) | "
+		       "arena+lit=%.1f us/frame (%lu allocs, %.2f%% fewer allocs, %.2fx faster)\n",
+		       ITERS, heap_us / ITERS, heap_allocs,
+		       arena_us / ITERS, arena_allocs, reduction_pct,
+		       arena_us > 0.0 ? heap_us / arena_us : 0.0);
+		rc = check(heap_allocs > 100000 && arena_allocs * 20 <= heap_allocs,
+		           "arena+lit reduces heap allocations by >95%");
+#else
+		printf("bud_arena bench (%d renders, ~105 nodes): "
+		       "heap=%.1f us/frame | arena+lit=%.1f us/frame (%.2fx faster)\n",
+		       ITERS, heap_us / ITERS, arena_us / ITERS,
+		       arena_us > 0.0 ? heap_us / arena_us : 0.0);
+#endif
+		bud_arena_free(arena);
+		if (rc != 0)
+			return rc;
+	}
+
+	return 0;
+}
+
 int main(void)
 {
 
@@ -611,6 +1076,8 @@ int main(void)
 	if (test_detach() != 0)
 		return 1;
 	if (test_window_event_type() != 0)
+		return 1;
+	if (test_bud_arena_and_lit() != 0)
 		return 1;
 	bud_node *root;
 	bud_node *main_el;

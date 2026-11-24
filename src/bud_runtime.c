@@ -479,8 +479,7 @@ BUD_WEAK void bud_patch_text(bud_node *node, const char *value)
 {
 	if (!node || !value)
 		return;
-	free(node->text);
-	node->text = strdup(value);
+	bud_node_set_text_copy(node, value);
 }
 
 BUD_WEAK void bud_app_set_state(void)

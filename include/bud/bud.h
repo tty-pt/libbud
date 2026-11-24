@@ -158,11 +158,25 @@ bud_node *bud_fragment(void);
 bud_node *bud_element(const char *tag);
 
 /**
+ * @brief Create an element node with a static-lifetime tag string (zero-copy).
+ * @param[in] tag_lit Static string literal tag name (not copied or freed).
+ * @return New element node.
+ */
+bud_node *bud_element_lit(const char *tag_lit);
+
+/**
  * @brief Create a text node (HTML-escaped on render).
  * @param[in] text Text content.
  * @return New text node.
  */
 bud_node *bud_text(const char *text);
+
+/**
+ * @brief Create a text node with a static-lifetime string (zero-copy).
+ * @param[in] text_lit Static string literal text (not copied or freed).
+ * @return New text node.
+ */
+bud_node *bud_text_lit(const char *text_lit);
 
 /**
  * @brief Create a text node from a printf-style format.
@@ -252,6 +266,18 @@ bud_component_render(const bud_component *component, const void *props);
 int bud_set_attr(bud_node *node, const char *name, const char *value);
 
 /**
+ * @brief Set an attribute with static-lifetime name and value (zero-copy).
+ */
+int bud_set_attr_lit(
+        bud_node *node, const char *name_lit, const char *value_lit);
+
+/**
+ * @brief Set an attribute with a static-lifetime name and copied value.
+ */
+int bud_set_attr_name_lit(
+        bud_node *node, const char *name_lit, const char *value);
+
+/**
  * @brief Set an attribute from a printf-style format.
  * @param[in] node Target node.
  * @param[in] name Attribute name.
@@ -269,6 +295,11 @@ int bud_set_attr_fmt(bud_node *node, const char *name, const char *fmt, ...);
 int bud_set_bool_attr(bud_node *node, const char *name);
 
 /**
+ * @brief Set a boolean attribute with a static-lifetime name (zero-copy).
+ */
+int bud_set_bool_attr_lit(bud_node *node, const char *name_lit);
+
+/**
  * @brief Read an attribute value.
  * @param[in] node Target node.
  * @param[in] name Attribute name.
@@ -283,7 +314,14 @@ const char *bud_get_attr(const bud_node *node, const char *name);
  * @return 0 on success.
  */
 static inline int bud_set_key(bud_node *node, const char *key) {
-	return bud_set_attr(node, "data-bud-key", key);
+	return bud_set_attr_name_lit(node, "data-bud-key", key);
+}
+
+/**
+ * @brief Set a stable key with a static-lifetime string (zero-copy).
+ */
+static inline int bud_set_key_lit(bud_node *node, const char *key_lit) {
+	return bud_set_attr_lit(node, "data-bud-key", key_lit);
 }
 
 /**
@@ -360,6 +398,13 @@ int bud_bind(
  */
 int bud_bind_ctx(
         bud_node *node, const char *event, int bubbles,
+        bud_event_handler_fn handler, const void *ctx, size_t ctx_size);
+
+/**
+ * @brief Bind an event handler with a static-lifetime event name (zero-copy).
+ */
+int bud_bind_ctx_lit(
+        bud_node *node, const char *event_lit, int bubbles,
         bud_event_handler_fn handler, const void *ctx, size_t ctx_size);
 
 /**
@@ -683,6 +728,61 @@ void bud_free(bud_node *node);
  * @param[in] value String to free.
  */
 void bud_free_string(char *value);
+
+/* ── Per-render bump arena ───────────────────────────────────────────── */
+
+/**
+ * @brief Opaque bump-allocator arena for per-render bud_node trees.
+ *
+ * While pushed via bud_arena_push(), node/attr/listener/props/string
+ * allocations are bumped from contiguous growing slabs rather than individual
+ * malloc/calloc calls. Calling bud_arena_reset() or bud_arena_free() tears
+ * down the entire tree in O(slabs) without walking nodes. Calling bud_free()
+ * on arena nodes remains safe (lifecycle unmount runs; arena slabs stay intact).
+ */
+typedef struct bud_arena bud_arena;
+
+/**
+ * @brief Create a new bump arena.
+ * @param[in] initial_cap Initial slab capacity in bytes (0 = default 8192).
+ * @return New arena, or NULL on allocation failure.
+ */
+bud_arena *bud_arena_new(size_t initial_cap);
+
+/**
+ * @brief Activate an arena for subsequent bud_node allocations on this thread.
+ * @param[in] arena Arena to activate (or NULL to allocate from heap).
+ * @return Previously active arena (pass to bud_arena_pop() to restore).
+ */
+bud_arena *bud_arena_push(bud_arena *arena);
+
+/**
+ * @brief Restore the previously active arena returned by bud_arena_push().
+ * @param[in] prev Arena pointer returned by the matching bud_arena_push().
+ */
+void bud_arena_pop(bud_arena *prev);
+
+/**
+ * @brief Return the currently active arena on this thread, or NULL.
+ */
+bud_arena *bud_arena_current(void);
+
+/**
+ * @brief Reset an arena for reuse, invalidating all nodes allocated from it.
+ * @param[in] arena Target arena (NULL is a no-op).
+ */
+void bud_arena_reset(bud_arena *arena);
+
+/**
+ * @brief Free an arena and all slabs it owns.
+ * @param[in] arena Target arena (NULL is a no-op).
+ */
+void bud_arena_free(bud_arena *arena);
+
+/**
+ * @brief Return total bytes bumped from the arena since creation or last reset.
+ */
+size_t bud_arena_bytes_used(const bud_arena *arena);
 
 /* JSON field extraction helpers (no json-c dependency) — jsmn-backed */
 /**

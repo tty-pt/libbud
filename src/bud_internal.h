@@ -10,32 +10,106 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stddef.h>
+
+#if defined(__wasm__) || defined(__STDC_NO_THREADS__)
+#define BUD_TLS
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define BUD_TLS _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define BUD_TLS __thread
+#else
+#define BUD_TLS
+#endif
+
+#define BUD_ARENA_DEFAULT_CAP      8192u
+#define BUD_ARENA_MAX_SLAB_CAP     65536u
+#define BUD_ARENA_MAX_RETAIN_BYTES 262144u
+
+typedef struct bud_arena_slab {
+	struct bud_arena_slab *next;
+	size_t used;
+	size_t cap;
+	max_align_t data[];
+} bud_arena_slab;
+
+struct bud_arena {
+	bud_arena_slab *head;
+	bud_arena_slab *cur;
+	size_t initial_cap;
+	size_t total_used;
+	size_t slab_count;
+};
+
+extern BUD_TLS bud_arena *bud_active_arena;
+
+void *bud_arena_alloc_slow(bud_arena *arena, size_t size, size_t align);
+
+static inline size_t bud_align_up(size_t n, size_t align)
+{
+	return (n + (align - 1u)) & ~(align - 1u);
+}
+
+static inline void *bud_arena_alloc(bud_arena *arena, size_t size, size_t align)
+{
+	bud_arena_slab *s = arena->cur;
+	size_t off = bud_align_up(s->used, align);
+	if (off <= s->cap && size <= s->cap - off) {
+		unsigned char *base = (unsigned char *)s->data;
+		s->used = off + size;
+		arena->total_used += size;
+		return base + off;
+	}
+	return bud_arena_alloc_slow(arena, size, align);
+}
+
+enum {
+	BUD_ATTR_ARENA      = 1u << 0,
+	BUD_ATTR_NAME_OWNED = 1u << 1,
+	BUD_ATTR_VAL_OWNED  = 1u << 2
+};
+
+enum {
+	BUD_LISTENER_ARENA       = 1u << 0,
+	BUD_LISTENER_EVENT_OWNED = 1u << 1,
+	BUD_LISTENER_USER_OWNED  = 1u << 2
+};
+
+enum {
+	BUD_NODE_ARENA       = 1u << 0,
+	BUD_NODE_TAG_OWNED   = 1u << 1,
+	BUD_NODE_TEXT_OWNED  = 1u << 2,
+	BUD_NODE_KEY_OWNED   = 1u << 3,
+	BUD_NODE_PROPS_OWNED = 1u << 4
+};
 
 typedef struct bud_attr bud_attr;
 typedef struct bud_listener bud_listener;
 
 struct bud_attr {
-	char *name;
-	char *value;
-	int is_boolean;
+	const char *name;
+	const char *value;
 	bud_attr *next;
+	uint8_t is_boolean;
+	uint8_t flags;
 };
 
 struct bud_listener {
-	char *event;
-	int bubbles;
+	const char *event;
 	bud_event_handler_fn handler;
 	void *user;
 	size_t user_size;
 	bud_listener *next;
+	uint8_t bubbles;
+	uint8_t flags;
 };
 
 struct bud_node {
 	bud_node_kind kind;
 	unsigned int id;
-	char *tag;
-	char *text;
-	char *key;
+	const char *tag;
+	const char *text;
+	const char *key;
 	bud_component_fn comp_fn;
 	void *comp_ctx;
 	void *comp_props;
@@ -50,11 +124,9 @@ struct bud_node {
 	bud_lifecycle_fn on_update;
 	bud_lifecycle_fn on_unmount;
 	void *lifecycle_user;
-	int mounted;
-	/* Set on a root that came out of bud_vdom_diff: its ids are now the ids
-	 * the DOM carries (matched nodes inherit, inserted nodes got fresh ones),
-	 * so bud_prepare_render must not renumber it DFS again. */
-	int ids_frozen;
+	uint8_t mounted;
+	uint8_t ids_frozen;
+	uint8_t flags;
 	BUD_SRC_FIELDS
 };
 
@@ -72,7 +144,6 @@ typedef struct bud_buf {
 	size_t cap;
 } bud_buf;
 
-
 static inline char *bud_strdup(const char *value)
 {
 	size_t len;
@@ -89,6 +160,81 @@ static inline char *bud_strdup(const char *value)
 	}
 
 	memcpy(copy, value, len + 1);
+	return copy;
+}
+
+static inline void *bud_alloc_zero(size_t size, size_t align, int *from_arena)
+{
+	bud_arena *arena = bud_active_arena;
+	if (arena) {
+		void *p = bud_arena_alloc(arena, size, align);
+		if (p) {
+			memset(p, 0, size);
+			*from_arena = 1;
+		}
+		return p;
+	}
+	*from_arena = 0;
+	return calloc(1, size);
+}
+
+static inline const char *bud_alloc_str(const char *value, int *owned)
+{
+	size_t len;
+	char *copy;
+	bud_arena *arena;
+
+	if (!value) {
+		*owned = 0;
+		return NULL;
+	}
+
+	len = strlen(value);
+	arena = bud_active_arena;
+	if (arena) {
+		copy = (char *)bud_arena_alloc(arena, len + 1, 1);
+		if (!copy) {
+			*owned = 0;
+			return NULL;
+		}
+		memcpy(copy, value, len + 1);
+		*owned = 0;
+		return copy;
+	}
+
+	copy = (char *)malloc(len + 1);
+	if (!copy) {
+		*owned = 0;
+		return NULL;
+	}
+	memcpy(copy, value, len + 1);
+	*owned = 1;
+	return copy;
+}
+
+static inline void *bud_alloc_bytes(const void *src, size_t size, int *owned)
+{
+	void *copy;
+	bud_arena *arena = bud_active_arena;
+
+	if (arena) {
+		copy = bud_arena_alloc(arena, size, _Alignof(max_align_t));
+		if (!copy) {
+			*owned = 0;
+			return NULL;
+		}
+		memcpy(copy, src, size);
+		*owned = 0;
+		return copy;
+	}
+
+	copy = malloc(size);
+	if (!copy) {
+		*owned = 0;
+		return NULL;
+	}
+	memcpy(copy, src, size);
+	*owned = 1;
 	return copy;
 }
 
@@ -225,13 +371,18 @@ static inline int bud_buf_append_escaped(bud_buf *buf, const char *text, int att
 static inline bud_node *bud_node_new(bud_node_kind kind)
 {
 	bud_node *node;
+	int from_arena = 0;
 
-	node = (bud_node *)calloc(1, sizeof(*node));
+	node = (bud_node *)bud_alloc_zero(
+	        sizeof(*node), _Alignof(bud_node), &from_arena);
 	if (!node) {
 		return NULL;
 	}
 
 	node->kind = kind;
+	if (from_arena) {
+		node->flags |= BUD_NODE_ARENA;
+	}
 	return node;
 }
 
@@ -287,6 +438,7 @@ static inline bud_listener *bud_listener_find(bud_node *node, const char *event)
 void bud_node_call_mount(bud_node *node, bud_runtime *runtime);
 void bud_node_call_update(bud_node *node, bud_runtime *runtime);
 void bud_node_call_unmount(bud_node *node, bud_runtime *runtime);
+void bud_node_set_text_copy(bud_node *node, const char *value);
 extern bud_node *(*bud_ssr_expand_component_hook)(const bud_node *node);
 bud_node *bud_ssr_expand_component(const bud_node *node);
 

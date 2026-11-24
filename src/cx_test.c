@@ -70,14 +70,14 @@ static void test_elements_fragments_attrs_text(void)
 	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
 	assert(res.ok == 1);
 	assert(strstr(res.c_code, "bud_fragment()") != NULL);
-	assert(strstr(res.c_code, "bud_element(\"div\")") != NULL);
+	assert(strstr(res.c_code, "bud_element_lit(\"div\")") != NULL);
 	assert(strstr(res.c_code, "bud_set_attr_any(") != NULL);
-	assert(strstr(res.c_code, "bud_set_key(") != NULL);
-	assert(strstr(res.c_code, "bud_text(\"Count: \")") != NULL);
+	assert(strstr(res.c_code, "bud_set_key_lit(") != NULL);
+	assert(strstr(res.c_code, "bud_text_lit(\"Count: \")") != NULL);
 	assert(strstr(res.c_code, "bud_child_any((count))") != NULL);
-	assert(strstr(res.c_code, "bud_set_attr(") != NULL);
+	assert(strstr(res.c_code, "bud_set_attr_lit(") != NULL);
 	assert(strstr(res.c_code, "\"disabled\", \"\"") != NULL);
-	assert(strstr(res.c_code, "bud_element(\"input\")") != NULL);
+	assert(strstr(res.c_code, "bud_element_lit(\"input\")") != NULL);
 	assert(strstr(res.c_code, "JSX comment ignored") == NULL);
 	assert(strstr(res.c_code, "#line ") != NULL);
 	assert_spans_in_bounds(src, &res);
@@ -381,7 +381,7 @@ static void test_target_scoped_events(void)
 	cx_result res;
 	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
 	assert(res.diag_count == 0);
-	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"scroll@window\", 1, (on_scr), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx_lit(__cx_n1, \"scroll@window\", 1, (on_scr), NULL, 0);") != NULL);
 	assert(strstr(res.c_code, "\"keydown@document\"") != NULL);
 	cx_result_free(&res);
 	printf("  test_target_scoped_events: PASS\n");
@@ -402,10 +402,10 @@ static void test_self_and_custom_events(void)
 	cx_result res;
 	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
 	assert(res.diag_count == 0);
-	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"mousedown\", 0, (on_dn), NULL, 0);") != NULL);
-	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"wheel\", 0, __cx_fn_1,") != NULL);
-	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"cycle-viewport\", 1, (on_cy), NULL, 0);") != NULL);
-	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"custom-drag\", 0, (on_dn), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx_lit(__cx_n1, \"mousedown\", 0, (on_dn), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx_lit(__cx_n1, \"wheel\", 0, __cx_fn_1,") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx_lit(__cx_n1, \"cycle-viewport\", 1, (on_cy), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "bud_bind_ctx_lit(__cx_n1, \"custom-drag\", 0, (on_dn), NULL, 0);") != NULL);
 	cx_result_free(&res);
 	printf("  test_self_and_custom_events: PASS\n");
 }

@@ -37,12 +37,42 @@ __attribute__((constructor)) static void wasm_platform_init(void)
 }
 
 static bud_runtime *runtime = NULL;
+static bud_arena *g_root_arena = NULL;
 #define BUD_MAX_SLOTS 4
+#define BUD_ARENA_POOL_CAP 8
 static bud_runtime *g_slot_runtimes[BUD_MAX_SLOTS];
+static bud_arena *g_slot_arenas[BUD_MAX_SLOTS];
 static bud_node *(*g_slot_render_fns[BUD_MAX_SLOTS])(void);
+static bud_arena *g_arena_pool[BUD_ARENA_POOL_CAP];
+static size_t g_arena_pool_len = 0;
 static char wasm_dbg_buf[65536];
 
 extern bud_node *bud_app_render(void) __attribute__((weak));
+
+static bud_arena *acquire_render_arena(void)
+{
+	if (g_arena_pool_len > 0)
+		return g_arena_pool[--g_arena_pool_len];
+	return bud_arena_new(8192);
+}
+
+static void release_render_arena(bud_arena *a)
+{
+	if (!a)
+		return;
+	bud_arena_reset(a);
+	if (g_arena_pool_len < BUD_ARENA_POOL_CAP)
+		g_arena_pool[g_arena_pool_len++] = a;
+	else
+		bud_arena_free(a);
+}
+
+static void free_vdom_root(bud_node *root, bud_arena *arena)
+{
+	if (root)
+		bud_free(root);
+	release_render_arena(arena);
+}
 
 static int noop_emit(
         void *user, const char *op, const char *a, const char *b, const char *c)
@@ -75,15 +105,29 @@ int bud_slot_mount(int slot, bud_node *(*render_fn)(void))
 		return -1;
 	g_slot_render_fns[slot] = render_fn;
 	if (g_slot_runtimes[slot]) {
+		bud_node *old_root = bud_runtime_root(g_slot_runtimes[slot]);
+		bud_arena *old_arena = g_slot_arenas[slot];
+		if (runtime == g_slot_runtimes[slot]) {
+			runtime = NULL;
+			g_root_arena = NULL;
+		}
 		bud_runtime_free(g_slot_runtimes[slot]);
 		g_slot_runtimes[slot] = NULL;
+		g_slot_arenas[slot] = NULL;
+		free_vdom_root(old_root, old_arena);
 	}
+	bud_arena *arena = acquire_render_arena();
+	bud_arena *prev = bud_arena_push(arena);
 	bud_node *root = render_fn();
+	bud_arena_pop(prev);
 	if (root) {
 		bud_render_ops(root, noop_emit, NULL);
 		g_slot_runtimes[slot] = bud_runtime_new(root);
+		g_slot_arenas[slot] = arena;
 		bud_runtime_mount(g_slot_runtimes[slot]);
 		if (slot == 1 || !runtime) runtime = g_slot_runtimes[slot];
+	} else {
+		release_render_arena(arena);
 	}
 	return 0;
 }
@@ -99,13 +143,21 @@ int bud_slot_update(int slot, bud_node *(*render_fn)(void))
 #if defined(__wasm__)
 	if (g_slot_runtimes[slot]) {
 		bud_node *old_root = bud_runtime_root(g_slot_runtimes[slot]);
+		bud_arena *old_arena = g_slot_arenas[slot];
+		bud_arena *new_arena = acquire_render_arena();
+		bud_arena *prev = bud_arena_push(new_arena);
 		bud_node *new_root = render_fn();
+		bud_arena_pop(prev);
 		if (new_root) {
 			bud_vdom_diff(old_root, new_root, emit_patch_wrapper, (void *)(intptr_t)slot);
 			bud_runtime_free(g_slot_runtimes[slot]);
 			g_slot_runtimes[slot] = bud_runtime_new(new_root);
+			g_slot_arenas[slot] = new_arena;
+			free_vdom_root(old_root, old_arena);
 			bud_runtime_mount(g_slot_runtimes[slot]);
 			if (slot == 1 || !runtime) runtime = g_slot_runtimes[slot];
+		} else {
+			release_render_arena(new_arena);
 		}
 	}
 #endif
@@ -115,10 +167,17 @@ int bud_slot_update(int slot, bud_node *(*render_fn)(void))
 void bud_slot_cleanup(int slot)
 {
 	if (slot >= 0 && slot < BUD_MAX_SLOTS && g_slot_runtimes[slot]) {
-		if (runtime == g_slot_runtimes[slot]) runtime = NULL;
+		bud_node *old_root = bud_runtime_root(g_slot_runtimes[slot]);
+		bud_arena *old_arena = g_slot_arenas[slot];
+		if (runtime == g_slot_runtimes[slot]) {
+			runtime = NULL;
+			g_root_arena = NULL;
+		}
 		g_slot_render_fns[slot] = NULL;
 		bud_runtime_free(g_slot_runtimes[slot]);
 		g_slot_runtimes[slot] = NULL;
+		g_slot_arenas[slot] = NULL;
+		free_vdom_root(old_root, old_arena);
 	}
 }
 
@@ -126,11 +185,17 @@ ISO_EXPORT_AS(void, wasm_mount, bud_app_mount)
 {
 	bud_host_emit_patch("MOUNT_START", 11, NULL, 0, NULL, 0, NULL, 0);
 	if (!runtime && bud_app_render) {
+		bud_arena *arena = acquire_render_arena();
+		bud_arena *prev = bud_arena_push(arena);
 		bud_node *app = bud_app_render();
+		bud_arena_pop(prev);
 		if (app) {
 			bud_render_ops(app, noop_emit, NULL);
 			runtime = bud_runtime_new(app);
+			g_root_arena = arena;
 			bud_runtime_mount(runtime);
+		} else {
+			release_render_arena(arena);
 		}
 		bud_host_emit_patch(
 		        "MOUNT_DONE", 10, NULL, 0, NULL, 0, NULL, 0);
@@ -150,14 +215,22 @@ void bud_app_set_state(void)
 	if (!runtime || !bud_app_render)
 		return;
 	bud_node *old_root = bud_runtime_root(runtime);
+	bud_arena *old_arena = g_root_arena;
+	bud_arena *new_arena = acquire_render_arena();
+	bud_arena *prev = bud_arena_push(new_arena);
 	bud_node *new_root = bud_app_render();
-	if (!new_root)
+	bud_arena_pop(prev);
+	if (!new_root) {
+		release_render_arena(new_arena);
 		return;
+	}
 
 	bud_vdom_diff(old_root, new_root, emit_patch_wrapper, NULL);
 
 	bud_runtime_free(runtime);
 	runtime = bud_runtime_new(new_root);
+	g_root_arena = new_arena;
+	free_vdom_root(old_root, old_arena);
 	bud_runtime_mount(runtime);
 }
 
@@ -168,9 +241,21 @@ ISO_EXPORT_AS(void, wasm_update, bud_app_update)
 
 ISO_EXPORT_AS(void, wasm_unmount, bud_app_unmount)
 {
+	for (int i = 0; i < BUD_MAX_SLOTS; i++) {
+		if (g_slot_runtimes[i])
+			bud_slot_cleanup(i);
+	}
 	if (runtime) {
+		bud_node *old_root = bud_runtime_root(runtime);
+		bud_arena *old_arena = g_root_arena;
 		bud_runtime_free(runtime);
 		runtime = NULL;
+		g_root_arena = NULL;
+		free_vdom_root(old_root, old_arena);
+	}
+	while (g_arena_pool_len > 0) {
+		bud_arena_free(g_arena_pool[--g_arena_pool_len]);
+		g_arena_pool[g_arena_pool_len] = NULL;
 	}
 }
 
