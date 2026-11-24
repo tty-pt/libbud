@@ -499,6 +499,17 @@ const char *bud_node_listener_event(const bud_node *node, size_t index);
 int bud_node_listener_bubbles(const bud_node *node, size_t index);
 
 /**
+ * @brief Recursively expand all BUD_NODE_COMPONENT nodes in a tree in-place.
+ *
+ * Takes ownership of @p root (freeing replaced component shells) and returns
+ * the expanded root node, or NULL if a root component expands to NULL.
+ *
+ * @param[in] root Root node of the tree to expand.
+ * @return Expanded root node, or NULL.
+ */
+bud_node *bud_expand_tree(bud_node *root);
+
+/**
  * @brief Render a node tree to HTML.
  * @param[in] root Root node.
  * @return malloc'd HTML string (free with bud_free_string), or NULL.

@@ -24,6 +24,84 @@ static void bud_prepare_render(bud_node *root)
 	bud_assign_ids(root, 0);
 }
 
+static void bud_expand_children(bud_node *parent);
+
+static bud_node *bud_expand_node_once(bud_node *node)
+{
+	const char *key = bud_get_key(node);
+	bud_node *exp = bud_ssr_expand_component(node);
+
+	if (exp && key && key[0] && exp->kind == BUD_NODE_ELEMENT &&
+	    !bud_get_key(exp))
+	{
+		bud_set_key(exp, key);
+	}
+	return exp;
+}
+
+bud_node *bud_expand_tree(bud_node *root)
+{
+	int depth = 0;
+
+	while (root && root->kind == BUD_NODE_COMPONENT && depth < 64) {
+		bud_node *exp = bud_expand_node_once(root);
+		root->parent = NULL;
+		root->next_sibling = NULL;
+		bud_free(root);
+		root = exp;
+		depth++;
+	}
+	if (!root) {
+		return NULL;
+	}
+	bud_expand_children(root);
+	return root;
+}
+
+static void bud_expand_children(bud_node *parent)
+{
+	bud_node *prev = NULL;
+	bud_node *child;
+
+	if (!parent) {
+		return;
+	}
+
+	child = parent->first_child;
+	while (child) {
+		bud_node *next = child->next_sibling;
+		if (child->kind == BUD_NODE_COMPONENT) {
+			bud_node *exp = bud_expand_tree(child);
+			if (exp) {
+				exp->parent = parent;
+				exp->next_sibling = next;
+				if (prev) {
+					prev->next_sibling = exp;
+				} else {
+					parent->first_child = exp;
+				}
+				if (!next) {
+					parent->last_child = exp;
+				}
+				prev = exp;
+			} else {
+				if (prev) {
+					prev->next_sibling = next;
+				} else {
+					parent->first_child = next;
+				}
+				if (!next) {
+					parent->last_child = prev;
+				}
+			}
+		} else {
+			bud_expand_children(child);
+			prev = child;
+		}
+		child = next;
+	}
+}
+
 static int bud_append_attr(bud_buf *buf, const char *name, const char *value)
 {
 	if (bud_buf_append_char(buf, ' ') != 0) {
@@ -177,17 +255,36 @@ static int bud_render_html_node(const bud_node *node, bud_buf *buf)
 	return 0;
 }
 
-static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
+static int bud_render_hydrated_html_node(
+        const bud_node *node, bud_buf *buf, unsigned int *next_id)
 {
 	const bud_attr *attr;
 	const bud_node *child;
 	char id_buf[32];
+	unsigned int id;
 
 	if (!node) {
 		return 0;
 	}
 
-	if (snprintf(id_buf, sizeof(id_buf), "%u", node->id) < 0) {
+	if (node->kind == BUD_NODE_COMPONENT) {
+		bud_node *expanded = bud_expand_node_once((bud_node *)node);
+		int rc = 0;
+		if (expanded) {
+			rc = bud_render_hydrated_html_node(expanded, buf, next_id);
+			bud_free(expanded);
+		}
+		return rc;
+	}
+
+	if (next_id) {
+		id = (*next_id)++;
+		((bud_node *)node)->id = id;
+	} else {
+		id = node->id;
+	}
+
+	if (snprintf(id_buf, sizeof(id_buf), "%u", id) < 0) {
 		return -1;
 	}
 
@@ -205,7 +302,7 @@ static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
 		for (child = node->first_child; child;
 		     child = child->next_sibling)
 		{
-			if (bud_render_hydrated_html_node(child, buf) != 0) {
+			if (bud_render_hydrated_html_node(child, buf, next_id) != 0) {
 				return -1;
 			}
 		}
@@ -244,15 +341,8 @@ static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
 		return 0;
 	case BUD_NODE_RAW_HTML:
 		return bud_buf_append(buf, node->text);
-	case BUD_NODE_COMPONENT: {
-		bud_node *expanded = bud_ssr_expand_component(node);
-		int rc = 0;
-		if (expanded) {
-			rc = bud_render_hydrated_html_node(expanded, buf);
-			bud_free(expanded);
-		}
-		return rc;
-	}
+	case BUD_NODE_COMPONENT:
+		return 0;
 	case BUD_NODE_ELEMENT:
 		break;
 	}
@@ -316,7 +406,7 @@ static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
 		return -1;
 	}
 	for (child = node->first_child; child; child = child->next_sibling) {
-		if (bud_render_hydrated_html_node(child, buf) != 0) {
+		if (bud_render_hydrated_html_node(child, buf, next_id) != 0) {
 			return -1;
 		}
 	}
@@ -332,21 +422,40 @@ static int bud_render_hydrated_html_node(const bud_node *node, bud_buf *buf)
 	return 0;
 }
 
-static int
-bud_render_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
+static int bud_render_ops_node(
+        const bud_node *node, bud_emit_fn emit, void *user,
+        unsigned int *next_id)
 {
 	const bud_attr *attr;
 	const bud_listener *listener;
 	const bud_node *child;
 	char id_buf[32];
 	char mode_buf[8];
+	unsigned int id;
 	int len;
 
 	if (!node) {
 		return 0;
 	}
 
-	len = snprintf(id_buf, sizeof(id_buf), "%u", node->id);
+	if (node->kind == BUD_NODE_COMPONENT) {
+		bud_node *expanded = bud_expand_node_once((bud_node *)node);
+		int rc = 0;
+		if (expanded) {
+			rc = bud_render_ops_node(expanded, emit, user, next_id);
+			bud_free(expanded);
+		}
+		return rc;
+	}
+
+	if (next_id) {
+		id = (*next_id)++;
+		((bud_node *)node)->id = id;
+	} else {
+		id = node->id;
+	}
+
+	len = snprintf(id_buf, sizeof(id_buf), "%u", id);
 	if (len < 0) {
 		return -1;
 	}
@@ -359,7 +468,7 @@ bud_render_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 		for (child = node->first_child; child;
 		     child = child->next_sibling)
 		{
-			if (bud_render_ops_node(child, emit, user) != 0) {
+			if (bud_render_ops_node(child, emit, user, next_id) != 0) {
 				return -1;
 			}
 		}
@@ -392,7 +501,7 @@ bud_render_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 		for (child = node->first_child; child;
 		     child = child->next_sibling)
 		{
-			if (bud_render_ops_node(child, emit, user) != 0) {
+			if (bud_render_ops_node(child, emit, user, next_id) != 0) {
 				return -1;
 			}
 		}
@@ -410,8 +519,9 @@ bud_render_ops_node(const bud_node *node, bud_emit_fn emit, void *user)
 	}
 }
 
-static int
-bud_hydrate_node(const bud_node *node, bud_hydrate_lookup_fn lookup, void *user)
+static int bud_hydrate_node(
+        const bud_node *node, bud_hydrate_lookup_fn lookup, void *user,
+        unsigned int *next_id)
 {
 	const bud_node *child;
 	const char *kind;
@@ -423,7 +533,23 @@ bud_hydrate_node(const bud_node *node, bud_hydrate_lookup_fn lookup, void *user)
 		return 0;
 	}
 
-	id = node->id;
+	if (node->kind == BUD_NODE_COMPONENT) {
+		bud_node *expanded = bud_expand_node_once((bud_node *)node);
+		int rc = 0;
+		if (expanded) {
+			rc = bud_hydrate_node(expanded, lookup, user, next_id);
+			bud_free(expanded);
+		}
+		return rc;
+	}
+
+	if (next_id) {
+		id = (*next_id)++;
+		((bud_node *)node)->id = id;
+	} else {
+		id = node->id;
+	}
+
 	kind = NULL;
 	tag = NULL;
 	text = NULL;
@@ -439,7 +565,7 @@ bud_hydrate_node(const bud_node *node, bud_hydrate_lookup_fn lookup, void *user)
 		for (child = node->first_child; child;
 		     child = child->next_sibling)
 		{
-			if (bud_hydrate_node(child, lookup, user) != 0) {
+			if (bud_hydrate_node(child, lookup, user, next_id) != 0) {
 				return -1;
 			}
 		}
@@ -454,7 +580,7 @@ bud_hydrate_node(const bud_node *node, bud_hydrate_lookup_fn lookup, void *user)
 		for (child = node->first_child; child;
 		     child = child->next_sibling)
 		{
-			if (bud_hydrate_node(child, lookup, user) != 0) {
+			if (bud_hydrate_node(child, lookup, user, next_id) != 0) {
 				return -1;
 			}
 		}
@@ -485,7 +611,6 @@ char *bud_render_html(const bud_node *root)
 	bud_buf buf;
 
 	bud_buf_init(&buf);
-	bud_prepare_render((bud_node *)root);
 	if (bud_render_html_node(root, &buf) != 0) {
 		free(buf.data);
 		return NULL;
@@ -505,10 +630,12 @@ char *bud_render_html(const bud_node *root)
 char *bud_render_hydrated_html(const bud_node *root)
 {
 	bud_buf buf;
+	unsigned int next_id = 0;
 
 	bud_buf_init(&buf);
-	bud_prepare_render((bud_node *)root);
-	if (bud_render_hydrated_html_node(root, &buf) != 0) {
+	if (bud_render_hydrated_html_node(
+	            root, &buf, (root && root->ids_frozen) ? NULL : &next_id) != 0)
+	{
 		free(buf.data);
 		return NULL;
 	}
@@ -526,22 +653,26 @@ char *bud_render_hydrated_html(const bud_node *root)
 
 int bud_render_ops(const bud_node *root, bud_emit_fn emit, void *user)
 {
+	unsigned int next_id = 0;
+
 	if (!emit) {
 		return -1;
 	}
 
-	bud_prepare_render((bud_node *)root);
-	return bud_render_ops_node(root, emit, user);
+	return bud_render_ops_node(
+	        root, emit, user, (root && root->ids_frozen) ? NULL : &next_id);
 }
 
 int bud_render_hydration_ops(const bud_node *root, bud_emit_fn emit, void *user)
 {
+	unsigned int next_id = 0;
+
 	if (!emit) {
 		return -1;
 	}
 
-	bud_prepare_render((bud_node *)root);
-	return bud_render_ops_node(root, emit, user);
+	return bud_render_ops_node(
+	        root, emit, user, (root && root->ids_frozen) ? NULL : &next_id);
 }
 
 /* parent_id: when non-NULL the id of the live element this node is inserted
@@ -643,7 +774,10 @@ static int bud_render_patch_ops_node_at(
 int bud_render_patch_ops(const bud_node *root, bud_emit_fn emit, void *user)
 {
 	char id_buf[32];
+	bud_node *tmp = NULL;
+	const bud_node *eff;
 	int len;
+	int rc;
 
 	if (!emit) {
 		return -1;
@@ -653,15 +787,28 @@ int bud_render_patch_ops(const bud_node *root, bud_emit_fn emit, void *user)
 		return 0;
 	}
 
-	bud_prepare_render((bud_node *)root);
-	len = snprintf(id_buf, sizeof(id_buf), "%u", root->id);
+	if (root->kind == BUD_NODE_COMPONENT) {
+		tmp = bud_expand_tree(bud_expand_node_once((bud_node *)root));
+		eff = tmp;
+	} else {
+		eff = root;
+	}
+	if (!eff) {
+		return 0;
+	}
+	bud_prepare_render((bud_node *)eff);
+	len = snprintf(id_buf, sizeof(id_buf), "%u", eff->id);
 	if (len < 0) {
+		bud_free(tmp);
 		return -1;
 	}
 	if (emit(user, "patch-clear", id_buf, NULL, NULL) != 0) {
+		bud_free(tmp);
 		return -1;
 	}
-	return bud_render_patch_ops_node(root, emit, user);
+	rc = bud_render_patch_ops_node(eff, emit, user);
+	bud_free(tmp);
+	return rc;
 }
 
 static const char *bud_get_node_key(const bud_node *node)
@@ -754,7 +901,7 @@ static int bud_vdom_diff_node(
 			bud_assign_fresh_ids(c);
 		bud_buf b;
 		bud_buf_init(&b);
-		if (bud_render_hydrated_html_node(new_node, &b) != 0) {
+		if (bud_render_hydrated_html_node(new_node, &b, NULL) != 0) {
 			free(b.data);
 			return -1;
 		}
@@ -995,31 +1142,56 @@ static int bud_vdom_diff_node(
 int bud_vdom_diff(
         bud_node *old_root, bud_node *new_root, bud_emit_fn emit, void *user)
 {
+	bud_node *old_tmp = NULL;
+	bud_node *new_tmp = NULL;
+	bud_node *eff_old = old_root;
+	bud_node *eff_new = new_root;
+	int rc;
+
 	if (!emit)
 		return -1;
 	if (!old_root && !new_root)
 		return 0;
-	int rc;
 
-	if (old_root)
-		bud_prepare_render(old_root);
-	if (new_root)
-		bud_prepare_render(new_root);
-	bud_diff_next_id = old_root ? bud_max_id(old_root) + 1 : 0;
-	rc = bud_vdom_diff_node(old_root, new_root, BUD_NO_PARENT, emit, user);
-	if (new_root && rc == 0)
+	if (eff_old) {
+		if (eff_old->kind == BUD_NODE_COMPONENT) {
+			old_tmp = bud_expand_tree(bud_expand_node_once(eff_old));
+			eff_old = old_tmp;
+		} else {
+			bud_expand_children(eff_old);
+		}
+		if (eff_old)
+			bud_prepare_render(eff_old);
+	}
+	if (eff_new) {
+		if (eff_new->kind == BUD_NODE_COMPONENT) {
+			new_tmp = bud_expand_tree(bud_expand_node_once(eff_new));
+			eff_new = new_tmp;
+		} else {
+			bud_expand_children(eff_new);
+		}
+		if (eff_new)
+			bud_prepare_render(eff_new);
+	}
+	bud_diff_next_id = eff_old ? bud_max_id(eff_old) + 1 : 0;
+	rc = bud_vdom_diff_node(eff_old, eff_new, BUD_NO_PARENT, emit, user);
+	if (new_root && !new_tmp && rc == 0)
 		new_root->ids_frozen = 1;
+	bud_free(old_tmp);
+	bud_free(new_tmp);
 	return rc;
 }
 
 int bud_hydrate(const bud_node *root, bud_hydrate_lookup_fn lookup, void *user)
 {
+	unsigned int next_id = 0;
+
 	if (!lookup) {
 		return -1;
 	}
 
-	bud_prepare_render((bud_node *)root);
-	return bud_hydrate_node(root, lookup, user);
+	return bud_hydrate_node(
+	        root, lookup, user, (root && root->ids_frozen) ? NULL : &next_id);
 }
 
 /* ── Tree dump for debugging ── */

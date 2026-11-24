@@ -1498,12 +1498,32 @@ static void parse_jsx_expr(cx_state *st, cx_buf *dst, cx_span_list *spans)
 
 				if (is_event) {
 					char ev_lower[64];
+					const char *ev_src = aname + 2;
 					size_t elen = an_len - 2;
-					if (elen >= sizeof(ev_lower))
-						elen = sizeof(ev_lower) - 1;
+					const char *ev_target = NULL;
+
+					if (an_len > 8 && memcmp(aname, "onWindow", 8) == 0 &&
+					    isupper((unsigned char)aname[8]))
+					{
+						ev_src = aname + 8;
+						elen = an_len - 8;
+						ev_target = "@window";
+					} else if (an_len > 10 && memcmp(aname, "onDocument", 10) == 0 &&
+					           isupper((unsigned char)aname[10]))
+					{
+						ev_src = aname + 10;
+						elen = an_len - 10;
+						ev_target = "@document";
+					}
+
+					size_t tlen = ev_target ? strlen(ev_target) : 0;
+					if (elen + tlen >= sizeof(ev_lower))
+						elen = sizeof(ev_lower) - 1 - tlen;
 					for (size_t k = 0; k < elen; k++)
-						ev_lower[k] = (char)tolower((unsigned char)aname[2 + k]);
-					ev_lower[elen] = '\0';
+						ev_lower[k] = (char)tolower((unsigned char)ev_src[k]);
+					if (ev_target)
+						memcpy(ev_lower + elen, ev_target, tlen);
+					ev_lower[elen + tlen] = '\0';
 
 					if (peek_at(st, 0) == '[') {
 						am.val_kind = CX_ATTR_CLOSURE;

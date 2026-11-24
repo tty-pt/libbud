@@ -318,7 +318,9 @@ static const char *const k_html_attrs[] = {
 	"value", "name", "placeholder", "disabled", "checked", "selected",
 	"for", "action", "method", "role", "tabindex", "aria-label",
 	"onClick", "onInput", "onChange", "onSubmit", "onKeyDown", "onKeyUp",
-	"onFocus", "onBlur", "onMouseDown", "onMouseUp", "onMouseEnter", "onMouseLeave"
+	"onFocus", "onBlur", "onMouseDown", "onMouseUp", "onMouseEnter", "onMouseLeave",
+	"onScroll", "onWindowScroll", "onWindowResize", "onWindowKeyDown",
+	"onDocumentClick", "onDocumentKeyDown"
 };
 
 static jval *make_comp_item(const char *label, int kind, const char *detail)

@@ -369,6 +369,24 @@ static void test_metadata_index(void)
 	printf("  test_metadata_index: PASS\n");
 }
 
+static void test_target_scoped_events(void)
+{
+	const char *src =
+		"static int on_scr(bud_event *e) { (void)e; return 0; }\n"
+		"static int on_key(bud_event *e) { (void)e; return 0; }\n"
+		"bud_node *bar(int x) {\n"
+		"  return <div onWindowScroll={on_scr} onDocumentKeyDown={[int x](bud_event *e) { (void)e; (void)x; }}></div>;\n"
+		"}\n";
+	cx_options opt = { .filename = "ev.cx" };
+	cx_result res;
+	assert(cx_transpile(&opt, src, strlen(src), &res) == 0);
+	assert(res.diag_count == 0);
+	assert(strstr(res.c_code, "bud_bind_ctx(__cx_n1, \"scroll@window\", 1, (on_scr), NULL, 0);") != NULL);
+	assert(strstr(res.c_code, "\"keydown@document\"") != NULL);
+	cx_result_free(&res);
+	printf("  test_target_scoped_events: PASS\n");
+}
+
 int main(void)
 {
 	printf("cx_test:\n");
@@ -380,6 +398,7 @@ int main(void)
 	test_span_mapping_roundtrip();
 	test_diagnostics_and_recovery();
 	test_metadata_index();
+	test_target_scoped_events();
 	printf("cx_test: ALL TESTS PASSED\n");
 	return 0;
 }

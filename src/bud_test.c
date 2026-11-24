@@ -86,6 +86,37 @@ static int test_slot_fill_fn(int slot_id, bud_node *parent, const void *state) {
 	return 0;
 }
 
+typedef struct {
+	const char *label;
+} test_leaf_props;
+
+static bud_node *test_comp_leaf(void *ctx, const void *raw_props)
+{
+	const test_leaf_props *p = (const test_leaf_props *)raw_props;
+	(void)ctx;
+	bud_node *sp = bud_element("span");
+	bud_set_attr(sp, "class", "leaf");
+	bud_append(sp, bud_text(p && p->label ? p->label : ""));
+	return sp;
+}
+
+static bud_node *test_comp_null(void *ctx, const void *raw_props)
+{
+	(void)ctx;
+	(void)raw_props;
+	return NULL;
+}
+
+static bud_node *test_comp_wrap(void *ctx, const void *raw_props)
+{
+	const test_leaf_props *p = (const test_leaf_props *)raw_props;
+	(void)ctx;
+	bud_node *box = bud_element("section");
+	bud_append(box, bud_component_vnode(test_comp_null, NULL, NULL, 0));
+	bud_append(box, bud_component_vnode(test_comp_leaf, NULL, p, sizeof(*p)));
+	return box;
+}
+
 #define TEST_STATE_SCHEMA(F, st) \
 	F(STR, st, title, 64, "") \
 	F(INT, st, score, 0, 0)
@@ -1394,6 +1425,56 @@ int main(void)
 		rc = check(k_el != NULL && bud_get_key(k_el) != NULL && strcmp(bud_get_key(k_el), "hero-card") == 0,
 			"lx_key and bud_get_key handle stable node keys");
 		bud_free(k_el);
+		if (rc != 0) return rc;
+	}
+
+	/* ── Test bud_expand_tree + SSR/WASM component ID parity ── */
+	{
+		test_leaf_props p1 = { .label = "Hello" };
+		test_leaf_props p2 = { .label = "World" };
+
+		/* Root-level nested component: SSR hydrated HTML vs WASM expanded render_ops */
+		bud_node *ssr_root = bud_component_vnode(test_comp_wrap, NULL, &p1, sizeof(p1));
+		char *h_ssr = bud_render_hydrated_html(ssr_root);
+		rc = check(h_ssr != NULL &&
+		           strstr(h_ssr, "<section data-bud-id=\"0\">") != NULL &&
+		           strstr(h_ssr, "<span data-bud-id=\"1\" class=\"leaf\">") != NULL &&
+		           strstr(h_ssr, "<!--bud-text:2-->Hello<!--/bud-text:2-->") != NULL,
+		           "SSR hydrated HTML expands root/nested components before assigning IDs");
+		bud_free_string(h_ssr);
+		bud_free(ssr_root);
+		if (rc != 0) return rc;
+
+		bud_node *wasm_root = bud_expand_tree(
+		        bud_component_vnode(test_comp_wrap, NULL, &p1, sizeof(p1)));
+		test_ops comp_ops = { { 0 }, 0 };
+		rc = check(wasm_root != NULL && bud_render_ops(wasm_root, test_emit, &comp_ops) == 0,
+		           "WASM expanded component tree renders ops");
+		if (rc == 0)
+			rc = check(strstr(comp_ops.buffer, "element-open:section:0\n") != NULL &&
+			           strstr(comp_ops.buffer, "element-open:span:1\n") != NULL &&
+			           strstr(comp_ops.buffer, "text:Hello:2\n") != NULL,
+			           "WASM render_ops IDs match SSR hydrated HTML IDs 1-to-1");
+
+		bud_node *wasm_next = bud_expand_tree(
+		        bud_component_vnode(test_comp_wrap, NULL, &p2, sizeof(p2)));
+		test_ops comp_diff = { { 0 }, 0 };
+		if (rc == 0)
+			rc = check(bud_vdom_diff(wasm_root, wasm_next, test_emit, &comp_diff) == 0 &&
+			           strstr(comp_diff.buffer, "patch-text:World:2\n") != NULL,
+			           "WASM vdom_diff across expanded components patches exact text id");
+		bud_free(wasm_root);
+		bud_free(wasm_next);
+		if (rc != 0) return rc;
+
+		/* Key transfer from component node to expanded element */
+		bud_node *keyed_comp = bud_component_vnode(test_comp_leaf, NULL, &p1, sizeof(p1));
+		bud_set_key(keyed_comp, "row-7");
+		bud_node *exp_keyed = bud_expand_tree(keyed_comp);
+		rc = check(exp_keyed != NULL && bud_get_key(exp_keyed) != NULL &&
+		           strcmp(bud_get_key(exp_keyed), "row-7") == 0,
+		           "bud_expand_tree transfers key from component to expanded element");
+		bud_free(exp_keyed);
 		if (rc != 0) return rc;
 	}
 
