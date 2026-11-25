@@ -4,6 +4,7 @@ CFLAGS-bud_render-o := -fPIC
 CFLAGS-bud_runtime-o := -fPIC
 CFLAGS-bud_json-o := -fPIC
 CFLAGS-bud_reconcile-o := -fPIC
+CFLAGS-bud_dom_host-o := -fPIC
 CFLAGS-bud_test-o :=
 CFLAGS-bud_reconcile_test-o :=
 CFLAGS-cx-o :=

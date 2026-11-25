@@ -1819,4 +1819,175 @@ if (typeof window !== 'undefined') {
 	}
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const SVG_TAGS = new Set(['svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon', 'g', 'defs', 'use']);
+const BOOL_ATTRS = new Set(['hidden', 'disabled', 'checked', 'readonly', 'autoplay', 'playsinline', 'muted', 'multiple', 'open', 'selected']);
+
+export function createBudDomHost(rootEl, getWasm) {
+	const nodes = new Map();
+	const listeners = new Map();
+	let nextHandle = 2;
+	nodes.set(1, rootEl);
+
+	const getMem = () => {
+		const w = typeof getWasm === 'function' ? getWasm() : getWasm;
+		return w?.exports?.memory || w?.memory || null;
+	};
+	const getExp = (name) => {
+		const w = typeof getWasm === 'function' ? getWasm() : getWasm;
+		return w?.exports?.[name] || w?.[name] || null;
+	};
+
+	const dispatchToWasm = (handlerId, payload) => {
+		const fn = getExp('bud_dom_dispatch');
+		const malloc = getExp('malloc');
+		const free = getExp('free');
+		const mem = getMem();
+		if (!fn) return;
+		if (!payload || !malloc || !mem) {
+			fn(handlerId, 0, 0);
+			return;
+		}
+		const bytes = new TextEncoder().encode(String(payload));
+		const ptr = malloc(bytes.length + 1);
+		if (!ptr) {
+			fn(handlerId, 0, 0);
+			return;
+		}
+		const u8 = new Uint8Array(mem.buffer);
+		u8.set(bytes, ptr);
+		u8[ptr + bytes.length] = 0;
+		try {
+			fn(handlerId, ptr, bytes.length);
+		} finally {
+			if (free) free(ptr);
+		}
+	};
+
+	const extractPayload = (ev) => {
+		const t = ev.currentTarget || ev.target;
+		if (ev.type === 'keydown' || ev.type === 'keyup') {
+			return JSON.stringify({
+				key: ev.key || '',
+				code: ev.code || '',
+				shift: !!ev.shiftKey,
+				ctrl: !!(ev.ctrlKey || ev.metaKey),
+				alt: !!ev.altKey
+			});
+		}
+		if (t && typeof t === 'object') {
+			if (t.type === 'checkbox' || t.type === 'radio') return t.checked ? '1' : '0';
+			if ('value' in t && t.value !== undefined) return String(t.value);
+		}
+		return '';
+	};
+
+	const clearNodeListeners = (id) => {
+		const node = nodes.get(id);
+		const map = listeners.get(id);
+		if (node && map) {
+			for (const [evt, rec] of map.entries()) {
+				node.removeEventListener(evt, rec.fn);
+			}
+		}
+		listeners.delete(id);
+	};
+
+	return {
+		nodes,
+		imports: {
+			__proto__: null,
+			bud_dom_create_el(tagPtr, tagLen) {
+				const tag = readWasmString(getMem(), tagPtr, tagLen);
+				const el = SVG_TAGS.has(tag)
+					? document.createElementNS(SVG_NS, tag)
+					: document.createElement(tag);
+				const id = nextHandle++;
+				nodes.set(id, el);
+				return id;
+			},
+			bud_dom_create_text(textPtr, textLen) {
+				const text = readWasmString(getMem(), textPtr, textLen);
+				const tn = document.createTextNode(text);
+				const id = nextHandle++;
+				nodes.set(id, tn);
+				return id;
+			},
+			bud_dom_set_text(nodeId, textPtr, textLen) {
+				const n = nodes.get(nodeId);
+				if (n) n.nodeValue = readWasmString(getMem(), textPtr, textLen);
+			},
+			bud_dom_set_attr(nodeId, namePtr, nameLen, valPtr, valLen) {
+				const el = nodes.get(nodeId);
+				if (!el || el.nodeType !== 1) return;
+				const name = readWasmString(getMem(), namePtr, nameLen);
+				const val = readWasmString(getMem(), valPtr, valLen);
+				if (BOOL_ATTRS.has(name)) {
+					const on = val !== 'false' && val !== '0';
+					if (name in el) el[name] = on;
+					if (on) el.setAttribute(name, '');
+					else el.removeAttribute(name);
+					return;
+				}
+				if (name === 'value' && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) {
+					if (el.value !== val) el.value = val;
+					el.setAttribute('value', val);
+					return;
+				}
+				el.setAttribute(name, val);
+			},
+			bud_dom_remove_attr(nodeId, namePtr, nameLen) {
+				const el = nodes.get(nodeId);
+				if (!el || el.nodeType !== 1) return;
+				const name = readWasmString(getMem(), namePtr, nameLen);
+				if (BOOL_ATTRS.has(name) && name in el) el[name] = false;
+				el.removeAttribute(name);
+			},
+			bud_dom_insert_before(parentId, childId, beforeId) {
+				const p = nodes.get(parentId);
+				const c = nodes.get(childId);
+				const b = beforeId ? (nodes.get(beforeId) || null) : null;
+				if (p && c) p.insertBefore(c, b);
+			},
+			bud_dom_remove_child(parentId, childId) {
+				const p = nodes.get(parentId);
+				const c = nodes.get(childId);
+				if (p && c && c.parentNode === p) p.removeChild(c);
+			},
+			bud_dom_destroy_node(nodeId) {
+				clearNodeListeners(nodeId);
+				const n = nodes.get(nodeId);
+				if (n && n.parentNode) n.parentNode.removeChild(n);
+				nodes.delete(nodeId);
+			},
+			bud_dom_set_event(nodeId, evtPtr, evtLen, _bubbles, handlerId) {
+				const el = nodes.get(nodeId);
+				if (!el) return;
+				const evt = readWasmString(getMem(), evtPtr, evtLen);
+				let map = listeners.get(nodeId);
+				if (!map) {
+					map = new Map();
+					listeners.set(nodeId, map);
+				}
+				const prev = map.get(evt);
+				if (prev) {
+					el.removeEventListener(evt, prev.fn);
+					map.delete(evt);
+				}
+				if (!handlerId) return;
+				const fn = (ev) => {
+					if (evt === 'submit') ev.preventDefault();
+					dispatchToWasm(handlerId, extractPayload(ev));
+				};
+				el.addEventListener(evt, fn);
+				map.set(evt, { fn, handlerId });
+			},
+			bud_dom_clear_children(parentId) {
+				const p = nodes.get(parentId);
+				if (p) p.textContent = '';
+			}
+		}
+	};
+}
+
 export { buildHydrationMap, parseListenerList };

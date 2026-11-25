@@ -1,4 +1,19 @@
 #include "bud_internal.h"
+#include "../include/bud/bud_dom_host.h"
+
+static BUD_TLS const char *g_current_event_payload = "";
+
+const char *bud_dom_event_payload(void)
+{
+	return g_current_event_payload ? g_current_event_payload : "";
+}
+
+const char *bud_dom_set_event_payload(const char *payload)
+{
+	const char *prev = g_current_event_payload;
+	g_current_event_payload = payload;
+	return prev;
+}
 
 bud_runtime *bud_runtime_new(bud_node *root)
 {
@@ -215,6 +230,7 @@ int bud_runtime_dispatch(
 	ev.user = event_user;
 	ev.bubbles = 1;
 
+	const char *prev_payload = bud_dom_set_event_payload((const char *)event_user);
 	current = target;
 	rc = 0;
 	while (current) {
@@ -227,6 +243,7 @@ int bud_runtime_dispatch(
 		}
 		current = current->parent;
 	}
+	bud_dom_set_event_payload(prev_payload);
 
 	free(logical_event);
 	return rc;
