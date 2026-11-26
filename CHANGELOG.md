@@ -1,7 +1,32 @@
 ## [Unreleased] (target: v1.3.3)
 
+### Added
+- **Host-Agnostic Reactive Reconciler (`include/bud/bud_reconcile.h`, `src/bud_reconcile.c`, `src/bud_reconcile_test.c`)**:
+  - Added a pluggable `bud_host_ops` reactive reconciler (`bud_mount_new()`, `bud_mount_update()`, `bud_mount_flush()`, `bud_mount_unmount()`, `bud_mount_free()`) with hooks (`bud_use_state_raw()`, `bud_set_state_raw()`, `bud_use_ref_raw()`, `bud_use_effect()`) and typed text/attribute/key builders.
+  - Added `bud_component_vnode()`, `bud_expand_tree()` component ID parity, and target-scoped event binding (`bud_bind_ctx()`, `bud_bind_ctx_lit()`).
+- **Browser DOM Host Adapter & Event Propagation (`include/bud/bud_dom_host.h`, `src/bud_dom_host.c`, `htdocs/bud-cap.js`, `npm/dist/bud-cap.js`)**:
+  - Added `bud_dom_host_ops()`, `BUD_DOM_ROOT_HANDLE`, `bud_dom_dispatch()`, `bud_dom_event_payload()`, `bud_dom_set_event_payload()`, and `bud_dom_host_reset()` bridging `bud_reconcile` onto browser DOM nodes through `bud-cap.js`.
+  - Upstreamed `{ passive: false }` wheel listener and `button`/`buttons` payload propagation in `bud-cap.js`.
+- **Chunked `bud_arena` Bump Allocator & Zero-Copy `*_lit` APIs (`include/bud/bud.h`, `src/bud_internal.h`, `src/libbud.c`, `src/bud_test.c`)**:
+  - Added chunked bump-allocator arenas (`bud_arena_new()`, `bud_arena_push()`, `bud_arena_pop()`, `bud_arena_current()`, `bud_arena_reset()`, `bud_arena_free()`) and zero-copy string-literal node/attribute constructors (`bud_element_lit()`, `bud_text_lit()`, `bud_set_attr_lit()`, `bud_set_attr_name_lit()`, `bud_set_bool_attr_lit()`, `bud_bind_ctx_lit()`).
+- **`.cx` Transpiler, `cx-lsp` Language Server & `tree-sitter-cx` Grammar (`include/bud/cx.h`, `src/cx*.c`, `tree-sitter-cx/`)**:
+  - Added the `.cx` JSX-in-C transpiler CLI (`bin/cx`) with `on*Self` (`bubbles=0`) and `on:<literal>[:self]` custom event support, source map JSON output (`cx_write_map_json`), and header emission (`cx_write_header`).
+  - Added `cx-lsp` (`bin/cx-lsp`, `src/cx-lsp.c`, `src/cx_lsp_index.c`, `src/cx_lsp_features.c`) with flat metadata index, cross-file resolution, native UX, and code actions (`src/cx_lsp_test.c`, `src/cx_test.c`).
+  - Added `tree-sitter-cx/` (`grammar.js`, `queries/highlights.scm`, `test/corpus/cx.txt`, `tree-sitter.json`) syntax highlighting and grammar corpus.
+- **JavaScript / TypeScript Automatic JSX Runtime (`@tty-pt/bud/jsx-runtime`, `npm/jsx-runtime/`, `npm/dist/node.js`, `npm/examples/jsx-app/`)**:
+  - Added `npm/jsx-runtime/{index.js,jsx-runtime.js,reconciler.js,*.d.ts}` providing `jsx`, `jsxs`, `jsxDEV`, `Fragment`, React-style hooks (`useState`, `useReducer`, `useRef`, `useMemo`, `useCallback`, `useEffect`, `memo`, `shallowEqual`), and DOM reconciliation (`render`, `flushSync`).
+  - Extracted `npm/dist/node.js`, added `npm/examples/jsx-app/` + `npm/examples/{demo.mjs,index.html}`, and added 7 test and benchmark suites (`jsx-runtime.test.mjs`, `hooks.test.mjs`, `events.test.mjs`, `reconciler.test.mjs`, `dom-stub.mjs`, `bench-vs-react.mjs`, `bench-browser.mjs`).
+
+### Changed
+- **Modular Source Decomposition (`src/bud_internal.h`, `src/bud_json.c`, `src/bud_render.c`, `src/bud_runtime.c`, `src/bud_tpl.c`, `src/libbud.c`)**:
+  - Split monolithic `src/libbud.c` into focused compilation units (`bud_tpl.c`, `bud_render.c`, `bud_runtime.c`, `bud_json.c`, `bud_reconcile.c`, `bud_dom_host.c`) sharing `src/bud_internal.h`.
+- **Removed Legacy `bud-hydrate.js` (`htdocs/bud-cap.js`, `npm/dist/bud-cap.js`, `include/bud/bud_app.h`)**:
+  - Removed deleted legacy `htdocs/bud-hydrate.js` and `npm/dist/bud-hydrate.js`, consolidating browser hydration and DOM host capabilities into `htdocs/bud-cap.js` and `npm/dist/bud-cap.js`.
+
 ### Fixed
-- **Inactive Input `.value` Property Sync (`htdocs/bud-hydrate.js`, `htdocs/bud-cap.js`, `npm/dist/bud-hydrate.js`, `npm/dist/bud-cap.js`)**:
+- **Recursive DOM Fallback Dispatch & Default `localStorage` Seeding (`htdocs/bud-cap.js`)**:
+  - Guarded against recursive DOM fallback event dispatch and seeded default `localStorage` settings.
+- **Inactive Input `.value` Property Sync (`htdocs/bud-cap.js`, `npm/dist/bud-cap.js`)**:
   - Updated attribute patch replay (`op: "attr"`, `name === "value"`) to synchronize the live DOM `.value` property on `<input>` elements when `document.activeElement !== el`, ensuring programmatic state updates and resets reflect immediately in the UI without clobbering active user typing focus.
 
 ## [1.3.2] - 2026-11-16

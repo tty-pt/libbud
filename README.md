@@ -83,27 +83,26 @@ static const bud_field_desc_t state_fields[] = {
 
 ---
 
-## 3. Core API Reference
+## 3. Core API & Subsystems
 
-| Function / Macro | Signature | Description |
+| Header / Tool | Key APIs / Features | Description |
 | :--- | :--- | :--- |
-| `lx_el` / `lx_n` | `lx_el(tag, ...)` | Declarative element node constructor |
-| `lx_text` / `lx_attr` | `lx_text(str)` / `lx_attr(k, v)` | Text and attribute builders |
-| `bud_render_html` | `char *bud_render_html(node)` | Server-side plain HTML string serializer |
-| `bud_render_patch_ops`| `void bud_render_patch_ops(...)` | Emit browser DOM patch stream over WASM |
-| `bud_state_apply` | `int bud_state_apply(state, json, fields, n)` | 5-field table-driven UI state binder |
-| `bud_hydrate` | `void bud_hydrate(root, state)` | Reattach browser event listeners to SSR'd HTML |
-| `wasm_tick` | `void wasm_tick(float dt, int w, int h)` | Continuous 60fps frame loop hook for canvas/WebGL |
+| `<bud/bud.h>` | `bud_element_lit`, `bud_text_lit`, `bud_render_html`, `bud_vdom_diff`, `bud_expand_tree`, `bud_arena_*` | Core VDOM tree, SSR HTML serializer, VDOM differ, chunked bump-allocator arenas, and zero-copy `*_lit` builders |
+| `<bud/bud_jsx.h>` | `lx_el`, `lx_n`, `lx_frag`, `lx_text`, `lx_attr`, `lx_on` | Declarative JSX-style C99 macro builders |
+| `<bud/bud_reconcile.h>` | `bud_host_ops`, `bud_mount_new`, `bud_mount_update`, `bud_mount_flush`, `bud_use_state_raw`, `bud_use_ref_raw`, `bud_use_effect` | Host-agnostic reactive reconciler and hooks usable with browser DOM, `liblamina`, or custom hosts |
+| `<bud/bud_dom_host.h>` | `bud_dom_host_ops`, `BUD_DOM_ROOT_HANDLE`, `bud_dom_dispatch`, `bud_dom_event_payload` | Browser DOM `bud_host_ops` adapter backed by `htdocs/bud-cap.js` |
+| `<bud/bud_state.h>` / `<bud/bud_app.h>` | `bud_state_apply`, `bud_app_set_state` | 5-field table-driven state binder and isomorphic app hooks |
+| `<bud/cx.h>`, `bin/cx`, `bin/cx-lsp` | `cx_transpile`, `cx_write_map_json`, `cx_write_header`, `on*Self`, `on:<literal>[:self]` | `.cx` JSX-in-C transpiler, `cx-lsp` language server (flat metadata index, cross-file resolution, code actions), and `tree-sitter-cx/` grammar |
 
-👉 *For lifecycle hooks (`on-mount`/`on-unmount`), VDOM diffing, and WASM host bridge details, see `include/bud/bud.h`.*
+👉 *Source is organized into focused compilation units (`src/libbud.c`, `src/bud_tpl.c`, `src/bud_render.c`, `src/bud_runtime.c`, `src/bud_json.c`, `src/bud_reconcile.c`, `src/bud_dom_host.c`).*
 
 ---
 
-## 4. Isomorphic Architecture & Hydration
+## 4. Isomorphic Architecture & Browser Capability Bridge
 
 1. **Server-Side Render (SSR)**: The server executes `bud_app_render(state)`, serializing the AST to plain HTML strings. State is injected into `<script type="application/json" id="bud-state">` alongside `#bud-root`.
 2. **Instant Paint**: The browser renders clean HTML immediately with zero layout shift—even if JavaScript or WASM is disabled.
-3. **WASM Hydration**: When `htdocs/*.wasm` loads, `bud_hydrate()` reads `#bud-state`, unpacks the JSON into C structs, and attaches event listeners to existing DOM nodes without re-rendering the tree.
+3. **WASM Capability Bridge (`htdocs/bud-cap.js`)**: Loads alongside `@tty-pt/stele`, providing DOM host operations (`bud_dom_host_ops`), event payload propagation, `{ passive: false }` wheel listeners, and inactive `<input>.value` patch synchronization.
 
 ---
 
@@ -114,20 +113,22 @@ Prebuilt packages for Linux (APT / Alpine / Arch / Fedora-RHEL), macOS (Homebrew
 
 ### Build from Source
 ```sh
-make                  # builds lib/libbud.so + bin/bud_test
-make test             # run in-tree unit and serialization tests
-sudo make install     # install headers and library to system
+make                  # builds lib/libbud.so, bin/cx, bin/cx-lsp, and unit test binaries
+make test             # runs bud_test, bud_reconcile_test, cx_test, and cx_lsp_test
+make npm-test         # builds and runs @tty-pt/bud + JSX runtime tests
+sudo make install     # installs headers, libbud, bin/cx, bin/cx-lsp, and bud.pc
 ```
 
 ---
 
-## 6. JavaScript & WebAssembly Bindings (@tty-pt/bud)
+## 6. JavaScript, TypeScript & JSX Bindings (@tty-pt/bud)
 
 Official Node.js and Browser WebAssembly bindings are colocated in [`npm/`](npm/README.md):
-- **Universal Engine**: Reactive virtual DOM builder (`h`), node diffing (`diffVdom`), and patch operations for isomorphic rendering.
+- **Universal VDOM & Diffing (`@tty-pt/bud`)**: Virtual DOM builder (`h`), compiled C/WASM diffing (`diffVdom`), and `npm/dist/bud-cap.js` browser capability module (`@tty-pt/bud/cap`).
+- **Automatic JSX Runtime (`@tty-pt/bud/jsx-runtime`)**: React-compatible `jsx`/`jsxs`/`Fragment`, hooks (`useState`, `useReducer`, `useRef`, `useMemo`, `useCallback`, `useEffect`, `memo`), and reconciler (`render`, `flushSync`), with a working TypeScript example in [`npm/examples/jsx-app/`](npm/examples/jsx-app/package.json).
 - **C Development Headers**: Install via `npm install @tty-pt/bud` and consume headers from `node_modules/@tty-pt/bud/include`.
 
-👉 *For complete TypeScript usage, VDOM diffing guides, and API reference, see [npm/README.md](npm/README.md).*
+👉 *For complete TypeScript usage, JSX runtime setup, and API reference, see [npm/README.md](npm/README.md).*
 
 ## License
 
