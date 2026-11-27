@@ -179,8 +179,9 @@ function buildEventPayload(info, event) {
 		return `${Math.round(event.deltaX || 0)},${Math.round(event.deltaY || 0)},${Math.round(event.deltaMode || 0)}`;
 	}
 	if (event && (info.event === 'mousedown' || info.event === 'mousemove' || info.event === 'mouseup' ||
-	    info.event === 'pointerdown' || info.event === 'pointermove' || info.event === 'pointerup')) {
-		if (info.event === 'mousedown' && !info.bubbles && typeof event.preventDefault === 'function') {
+	    info.event === 'pointerdown' || info.event === 'pointermove' || info.event === 'pointerup' ||
+	    info.event === 'contextmenu')) {
+		if ((info.event === 'mousedown' || info.event === 'contextmenu') && !info.bubbles && typeof event.preventDefault === 'function') {
 			event.preventDefault();
 		}
 		const doc = getDocumentForNode(info.node);

@@ -20,7 +20,11 @@ ${DESTDIR}${PREFIX}/lib/pkgconfig/bud.pc: bud.pc
 	install -d ${DESTDIR}${PREFIX}/lib/pkgconfig
 	install -m 644 bud.pc $@
 
-install: ${DESTDIR}${PREFIX}/lib/pkgconfig/bud.pc
+${DESTDIR}${PREFIX}/share/bud/bud-cap.js: htdocs/bud-cap.js
+	install -d ${DESTDIR}${PREFIX}/share/bud
+	install -m 644 htdocs/bud-cap.js $@
+
+install: ${DESTDIR}${PREFIX}/lib/pkgconfig/bud.pc ${DESTDIR}${PREFIX}/share/bud/bud-cap.js
 
 CFLAGS += $(EXTRA_CFLAGS)
 
