@@ -1823,11 +1823,13 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const SVG_TAGS = new Set(['svg', 'path', 'rect', 'circle', 'line', 'polyline', 'polygon', 'g', 'defs', 'use']);
 const BOOL_ATTRS = new Set(['hidden', 'disabled', 'checked', 'readonly', 'autoplay', 'playsinline', 'muted', 'multiple', 'open', 'selected']);
 
-export function createBudDomHost(rootEl, getWasm) {
+export function createBudDomHost(rootEl, getWasm, opts) {
 	const nodes = new Map();
+	const elToId = new WeakMap();
 	const listeners = new Map();
 	let nextHandle = 2;
 	nodes.set(1, rootEl);
+	if (rootEl && typeof rootEl === 'object') elToId.set(rootEl, 1);
 
 	const getMem = () => {
 		const w = typeof getWasm === 'function' ? getWasm() : getWasm;
@@ -1838,7 +1840,30 @@ export function createBudDomHost(rootEl, getWasm) {
 		return w?.exports?.[name] || w?.[name] || null;
 	};
 
-	const dispatchToWasm = (handlerId, payload) => {
+	const pendingUnsynced = [];
+
+	const afterDispatch = () => {
+		if (opts && typeof opts.onAfterDispatch === 'function') {
+			opts.onAfterDispatch();
+		}
+		while (pendingUnsynced.length) {
+			const f = pendingUnsynced.pop();
+			if (f.__budUnsyncedPrev !== undefined) {
+				const v = f.__budUnsyncedPrev;
+				f.__budUnsyncedPrev = undefined;
+				if (f.value !== v) f.value = v;
+				f.__budVal = v;
+			}
+			if (f.__budUnsyncedPrevCheck !== undefined) {
+				const c = f.__budUnsyncedPrevCheck;
+				f.__budUnsyncedPrevCheck = undefined;
+				if (f.checked !== c) f.checked = c;
+				f.__budChecked = c;
+			}
+		}
+	};
+
+	const dispatchToWasm = (handlerId, payload, doFlush = true) => {
 		const fn = getExp('bud_dom_dispatch');
 		const malloc = getExp('malloc');
 		const free = getExp('free');
@@ -1846,12 +1871,14 @@ export function createBudDomHost(rootEl, getWasm) {
 		if (!fn) return;
 		if (!payload || !malloc || !mem) {
 			fn(handlerId, 0, 0);
+			if (doFlush) afterDispatch();
 			return;
 		}
 		const bytes = new TextEncoder().encode(String(payload));
 		const ptr = malloc(bytes.length + 1);
 		if (!ptr) {
 			fn(handlerId, 0, 0);
+			if (doFlush) afterDispatch();
 			return;
 		}
 		const u8 = new Uint8Array(mem.buffer);
@@ -1861,6 +1888,39 @@ export function createBudDomHost(rootEl, getWasm) {
 			fn(handlerId, ptr, bytes.length);
 		} finally {
 			if (free) free(ptr);
+		}
+		if (doFlush) afterDispatch();
+	};
+
+	const syncContainerFields = (container) => {
+		if (!container || typeof container.querySelectorAll !== 'function') return;
+		const fields = container.querySelectorAll('input, textarea, select');
+		for (const f of fields) {
+			const id = elToId.get(f);
+			if (!id) continue;
+			const map = listeners.get(id);
+			if (!map) continue;
+			const isCheck = f.type === 'checkbox' || f.type === 'radio';
+			const changed = isCheck
+				? (f.__budChecked !== undefined && f.checked !== f.__budChecked)
+				: (f.__budVal !== undefined && f.value !== f.__budVal);
+			if (!changed) continue;
+			const rec = map.get('input') || map.get('change');
+			if (!rec) continue;
+			if (isCheck) {
+				if (f.__budUnsyncedPrevCheck === undefined) {
+					f.__budUnsyncedPrevCheck = f.__budChecked;
+					pendingUnsynced.push(f);
+				}
+				f.__budChecked = !!f.checked;
+			} else {
+				if (f.__budUnsyncedPrev === undefined) {
+					f.__budUnsyncedPrev = f.__budVal;
+					pendingUnsynced.push(f);
+				}
+				f.__budVal = f.value;
+			}
+			dispatchToWasm(rec.handlerId, isCheck ? (f.checked ? '1' : '0') : String(f.value), false);
 		}
 	};
 
@@ -1904,6 +1964,7 @@ export function createBudDomHost(rootEl, getWasm) {
 					: document.createElement(tag);
 				const id = nextHandle++;
 				nodes.set(id, el);
+				elToId.set(el, id);
 				return id;
 			},
 			bud_dom_create_text(textPtr, textLen) {
@@ -1924,30 +1985,48 @@ export function createBudDomHost(rootEl, getWasm) {
 				const val = readWasmString(getMem(), valPtr, valLen);
 				if (BOOL_ATTRS.has(name)) {
 					const on = val !== 'false' && val !== '0';
+					if (name === 'checked') {
+						el.__budChecked = on;
+						el.__budUnsyncedPrevCheck = undefined;
+					}
 					if (name in el) el[name] = on;
 					if (on) el.setAttribute(name, '');
 					else el.removeAttribute(name);
 					return;
 				}
 				if (name === 'value' && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) {
-					if (el.value !== val) el.value = val;
-					el.setAttribute('value', val);
+					el.__budUnsyncedPrev = undefined;
+					if (el.__budVal !== val) {
+						el.value = val;
+						el.__budVal = val;
+					}
+					if (el.tagName === 'INPUT') el.setAttribute('value', val);
 					return;
 				}
 				el.setAttribute(name, val);
+				if (name === 'value' && el.tagName === 'OPTION' && el.parentNode?.tagName === 'SELECT' && el.parentNode.__budVal !== undefined) {
+					el.parentNode.value = el.parentNode.__budVal;
+				}
 			},
 			bud_dom_remove_attr(nodeId, namePtr, nameLen) {
 				const el = nodes.get(nodeId);
 				if (!el || el.nodeType !== 1) return;
 				const name = readWasmString(getMem(), namePtr, nameLen);
 				if (BOOL_ATTRS.has(name) && name in el) el[name] = false;
+				if (name === 'checked') el.__budChecked = false;
+				if (name === 'value') el.__budVal = '';
 				el.removeAttribute(name);
 			},
 			bud_dom_insert_before(parentId, childId, beforeId) {
 				const p = nodes.get(parentId);
 				const c = nodes.get(childId);
 				const b = beforeId ? (nodes.get(beforeId) || null) : null;
-				if (p && c) p.insertBefore(c, b);
+				if (p && c) {
+					p.insertBefore(c, b);
+					if (p.tagName === 'SELECT' && p.__budVal !== undefined) {
+						p.value = p.__budVal;
+					}
+				}
 			},
 			bud_dom_remove_child(parentId, childId) {
 				const p = nodes.get(parentId);
@@ -1976,7 +2055,23 @@ export function createBudDomHost(rootEl, getWasm) {
 				}
 				if (!handlerId) return;
 				const fn = (ev) => {
-					if (evt === 'submit') ev.preventDefault();
+					if (evt === 'submit') {
+						ev.preventDefault();
+						syncContainerFields(el);
+					} else if (evt === 'click' && el.tagName === 'BUTTON') {
+						syncContainerFields(el.closest('form') || el.parentElement);
+						if (el.type === 'submit' && el.form) {
+							const fid = elToId.get(el.form);
+							if (fid && listeners.get(fid)?.has('submit')) {
+								ev.preventDefault();
+							}
+						}
+					} else if (evt === 'input' || evt === 'change') {
+						if (el.type === 'checkbox' || el.type === 'radio') el.__budChecked = !!el.checked;
+						else if ('value' in el) el.__budVal = el.value;
+					} else if (evt === 'keydown' && el.tagName === 'TEXTAREA' && ev.key === 'Enter' && !ev.shiftKey) {
+						ev.preventDefault();
+					}
 					dispatchToWasm(handlerId, extractPayload(ev));
 				};
 				el.addEventListener(evt, fn);
